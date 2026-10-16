@@ -4,13 +4,12 @@ const LOCATIONS = [
   { id: 3, name: 'Пятая' },
   { id: 4, name: 'Дополнительно' }
 ];
-// Порядок по номерам: 1-Торопов, 2-Печерских, 3-Репин, 4-Осинкин, 5-Сабуров, 6-Сурнин
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
 const K_LOCATION = 3;
 const K_LOADING = 5;
-const CATCHUP_RATE = 0.7;
-const CATCHUP_MIN_COEF = 0.5;
+const CATCHUP_RATE = 1.0;
+const CATCHUP_MIN_COEF = 0.3;
 const FRESH_PENALTY = 200;
 const DEVIATION_SCALE = 200;
 const DEFAULT_PIN = '1234';
@@ -43,7 +42,6 @@ function loadState() {
       if (!p.wantLoadingToday) p.wantLoadingToday = {};
       if (!p.onlyLoadToday) p.onlyLoadToday = {};
 
-      // МИГРАЦИЯ: пересортировать людей по новому порядку
       if (!p.people) {
         p.people = DEFAULT_PEOPLE.map((name, i) => ({ id: i+1, name, noLoading: false, onlyLoading: false }));
       } else {
@@ -296,8 +294,18 @@ function getWorkDays(name) {
   }
   return count;
 }
-function getNormLocation(name) { return getWorkDays(name) / K_LOCATION; }
-function getNormLoading(name) { return getWorkDays(name) / K_LOADING; }
+
+// Норма с коэффициентом догоняния
+function getNormLocation(name) {
+  const base = getWorkDays(name) / K_LOCATION;
+  const coef = getCatchUpCoef(name);
+  return base * (1 + (1 - coef));
+}
+function getNormLoading(name) {
+  const base = getWorkDays(name) / K_LOADING;
+  const coef = getCatchUpCoef(name);
+  return base * (1 + (1 - coef));
+}
 function getDeviationLocation(name) {
   return (state.counts[name] || 0) - getNormLocation(name);
 }
@@ -353,7 +361,7 @@ function getLocationLocPoints(name, locName) {
   return (state.locCounts[name] && state.locCounts[name][locName]) || 0;
 }
 
-// ============= СОРТИРОВКА =============
+// ============= СОРТИРОВКА (полностью независимо) =============
 function getLocationSortScore(name, dateStr) {
   const dev = getDeviationLocation(name);
   const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
@@ -401,11 +409,11 @@ function renderDayOffLists() {
     </div>`;
   };
   document.getElementById('dayoffList').innerHTML =
-    `<div class="title">Полностью (нигде):</div>` +
+    `<div class="title red">🚫 Отсутствует весь день (меня нет):</div>` +
     state.people.map(p => build(p, full, 'full')).join('') +
-    `<div class="title" style="margin-top:14px;">Только с локаций (на отгрузку придут):</div>` +
+    `<div class="title" style="margin-top:14px;">🏭 Сегодня без локаций (только на отгрузку):</div>` +
     state.people.map(p => build(p, noLoc, 'noLoc')).join('') +
-    `<div class="title" style="margin-top:14px;">Только с отгрузки (на локации поедут):</div>` +
+    `<div class="title" style="margin-top:14px;">📦 Сегодня без отгрузки (только на локации):</div>` +
     state.people.map(p => build(p, noLoad, 'noLoad')).join('');
 }
 function toggleDayOff(date, name, field, checked) {
@@ -559,7 +567,7 @@ function distribute() {
     });
     assignments.push({
       location: req.location,
-      who: selected.map(p => ({ name: p.name, num: p.id, dev: getDeviationLocation(p.name) }))
+      who: selected.map(p => ({ name: p.name, num: p.id }))
     });
   }
 
@@ -567,7 +575,7 @@ function distribute() {
   const usedLoad = new Set();
   for (const n of state.manualLoad) {
     if (!canGoToLoading(n, date)) continue;
-    manualLoadData.push({ name: n, num: getPersonNumber(n), dev: getDeviationLoading(n) });
+    manualLoadData.push({ name: n, num: getPersonNumber(n) });
     usedLoad.add(n);
   }
   let loadingWho = [...manualLoadData];
@@ -580,7 +588,7 @@ function distribute() {
     });
     const remaining = Math.max(0, loadingNeed - loadingWho.length);
     for (const p of candidates.slice(0, remaining)) {
-      loadingWho.push({ name: p.name, num: p.id, dev: getDeviationLoading(p.name) });
+      loadingWho.push({ name: p.name, num: p.id });
     }
   }
 
@@ -589,9 +597,9 @@ function distribute() {
   for (const p of state.people) {
     const vac = isOnVacation(p.name, date);
     if (vac) absentInfo.push(`${p.id}. ${p.name} (${vac.type})`);
-    else if ((d.full || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (полностью)`);
-    else if ((d.noLoc || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (только с локаций)`);
-    else if ((d.noLoad || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (только с отгрузки)`);
+    else if ((d.full || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (отсутствует)`);
+    else if ((d.noLoc || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (без локаций)`);
+    else if ((d.noLoad || []).includes(p.name)) absentInfo.push(`${p.id}. ${p.name} (без отгрузки)`);
   }
   const note = absentInfo.length ? 'Отсутствовали: ' + absentInfo.join(', ') : '';
 
@@ -628,21 +636,13 @@ function distribute() {
     html += '<div style="font-weight:600;color:#1a73e8;">✅ Локации:</div>';
     for (const a of assignments) {
       html += `<div class="loc-name">${a.location.name}:</div><ul>`;
-      for (const w of a.who) {
-        const sign = w.dev > 0 ? '+' : '';
-        const color = w.dev < 0 ? '#137333' : (w.dev > 0 ? '#d93025' : '#777');
-        html += `<li><span class="num">${w.num}</span>${w.name} <span class="points" style="color:${color}">(откл. ${sign}${w.dev.toFixed(1)})</span></li>`;
-      }
+      for (const w of a.who) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
       html += '</ul>';
     }
   }
   if (loadingWho.length) {
     html += '<div style="font-weight:600;color:#e8710a;margin-top:12px;">📦 Отгрузка:</div><ul>';
-    for (const w of loadingWho) {
-      const sign = w.dev > 0 ? '+' : '';
-      const color = w.dev < 0 ? '#137333' : (w.dev > 0 ? '#d93025' : '#777');
-      html += `<li><span class="num">${w.num}</span>${w.name} <span class="points" style="color:${color}">(откл. ${sign}${w.dev.toFixed(1)})</span></li>`;
-    }
+    for (const w of loadingWho) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
     html += '</ul>';
   }
   if (yesterdayInfo.length) {
@@ -729,36 +729,55 @@ function cancelLoadingDay(date) {
   logAction('cancel', { date, type: 'loading' });
 }
 
-// ============= СТАТИСТИКА =============
+// ============= СТАТИСТИКА (прогресс-бары) =============
+function renderProgressBar(fact, norm, color) {
+  const percent = norm > 0 ? Math.min(100, (fact / norm) * 100) : 0;
+  const cls = color === 'orange' ? 'progress-fill orange' : 'progress-fill';
+  return `<div class="progress-bar"><div class="${cls}" style="width:${percent}%"></div></div>`;
+}
+
 function renderStats() {
   const el = document.getElementById('statsList');
-  const rows = state.people.map(p => ({
-    name: p.name, num: p.id, count: state.counts[p.name] || 0,
-    dev: getDeviationLocation(p.name),
-    breakdown: state.locCounts[p.name] || {}
-  })).sort((a, b) => a.dev - b.dev);
+  const rows = state.people.map(p => {
+    const fact = state.counts[p.name] || 0;
+    const norm = getNormLocation(p.name);
+    const dev = fact - norm;
+    return { name: p.name, num: p.id, fact, norm, dev, breakdown: state.locCounts[p.name] || {} };
+  }).sort((a, b) => a.dev - b.dev);
   el.innerHTML = rows.map(r => {
     const parts = LOCATIONS.map(loc => `<span>${loc.name}: ${r.breakdown[loc.name] || 0}</span>`).join('');
-    const sign = r.dev > 0 ? '+' : '';
-    const color = r.dev < 0 ? '#137333' : (r.dev > 0 ? '#d93025' : '#777');
+    const diff = r.dev;
+    let status, color;
+    if (diff < -0.5) { status = `осталось ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
+    else if (diff > 0.5) { status = `переработка +${diff.toFixed(1)}`; color = '#d93025'; }
+    else { status = 'в норме'; color = '#777'; }
     return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
-        <span><span class="count">${r.count}</span> · <span style="color:${color}">${sign}${r.dev.toFixed(1)}</span></span>
+        <span><b>${r.fact}</b> из ${r.norm.toFixed(1)} <span style="color:${color};font-size:12px">(${status})</span></span>
       </div>
+      ${renderProgressBar(r.fact, r.norm, 'blue')}
       <div class="stat-breakdown">${parts}</div>
     </div>`;
   }).join('');
+
   const el2 = document.getElementById('statsLoading');
-  const rows2 = state.people.map(p => ({
-    name: p.name, num: p.id, count: state.loadCounts[p.name] || 0, dev: getDeviationLoading(p.name)
-  })).sort((a, b) => a.dev - b.dev);
+  const rows2 = state.people.map(p => {
+    const fact = state.loadCounts[p.name] || 0;
+    const norm = getNormLoading(p.name);
+    const dev = fact - norm;
+    return { name: p.name, num: p.id, fact, norm, dev };
+  }).sort((a, b) => a.dev - b.dev);
   el2.innerHTML = rows2.map(r => {
-    const sign = r.dev > 0 ? '+' : '';
-    const color = r.dev < 0 ? '#137333' : (r.dev > 0 ? '#d93025' : '#777');
+    const diff = r.dev;
+    let status, color;
+    if (diff < -0.5) { status = `осталось ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
+    else if (diff > 0.5) { status = `переработка +${diff.toFixed(1)}`; color = '#d93025'; }
+    else { status = 'в норме'; color = '#777'; }
     return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
-        <span><span class="count orange">${r.count}</span> · <span style="color:${color}">${sign}${r.dev.toFixed(1)}</span></span>
+        <span><b>${r.fact}</b> из ${r.norm.toFixed(1)} <span style="color:${color};font-size:12px">(${status})</span></span>
       </div>
+      ${renderProgressBar(r.fact, r.norm, 'orange')}
     </div>`;
   }).join('');
 }
@@ -778,8 +797,8 @@ function openPersonCard(name) {
   const workDays = getWorkDays(name);
   const normLoc = getNormLocation(name);
   const normLoad = getNormLoading(name);
-  const devLoc = getDeviationLocation(name);
-  const devLoad = getDeviationLoading(name);
+  const devLoc = totalLoc - normLoc;
+  const devLoad = totalLoad - normLoad;
   const cu = state.catchUp[name];
   const locBreakdown = LOCATIONS.map(loc => ({
     name: loc.name,
@@ -789,23 +808,28 @@ function openPersonCard(name) {
   const loadHistory = state.loadingJournal.filter(j => j.who.includes(name)).slice(0, 15);
   const vacs = state.vacations[name] || [];
 
-  const locPercent = Math.min(100, (totalLoc / normLoc) * 100);
-  const loadPercent = Math.min(100, (totalLoad / normLoad) * 100);
+  const locPercent = normLoc > 0 ? Math.min(100, (totalLoc / normLoc) * 100) : 0;
+  const loadPercent = normLoad > 0 ? Math.min(100, (totalLoad / normLoad) * 100) : 0;
+
+  const locStatus = devLoc < -0.5 ? `Отстаёт на ${Math.abs(devLoc).toFixed(1)}` :
+                    devLoc > 0.5 ? `Переработка +${devLoc.toFixed(1)}` : 'В норме';
+  const loadStatus = devLoad < -0.5 ? `Отстаёт на ${Math.abs(devLoad).toFixed(1)}` :
+                     devLoad > 0.5 ? `Переработка +${devLoad.toFixed(1)}` : 'В норме';
 
   el.innerHTML = `
     <div class="card">
       <h2>👤 ${num}. ${name}</h2>
-      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет</span><span class="val">${Math.round(cu.coef*100)}% · ${cu.daysLeft} дн.</span></div>` : ''}
-      <div class="card-row"><span class="lbl">Рабочих дней (30)</span><span class="val">${workDays}</span></div>
+      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">${Math.round(cu.coef*100)}%</span></div>` : ''}
+      <div class="card-row"><span class="lbl">Рабочих дней за 30 дн.</span><span class="val">${workDays}</span></div>
     </div>
     <div class="card">
       <h2>🏭 Локации</h2>
       <div class="card-big">
-        <div><div class="big-num ${devLoc < 0 ? 'green' : (devLoc > 0 ? 'red' : '')}">${totalLoc}</div><div class="big-sub">выездов из ${normLoc.toFixed(1)}</div></div>
-        <div style="text-align:right"><div class="big-num ${devLoc < 0 ? 'green' : (devLoc > 0 ? 'red' : '')}">${devLoc > 0 ? '+' : ''}${devLoc.toFixed(1)}</div><div class="big-sub">отклонение</div></div>
+        <div><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${totalLoc}</div><div class="big-sub">из ${normLoc.toFixed(1)}</div></div>
+        <div style="text-align:right"><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${devLoc > 0 ? '+' : ''}${devLoc.toFixed(1)}</div><div class="big-sub">отклонение</div></div>
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${locPercent}%"></div></div>
-      <div class="info">${devLoc < 0 ? `Отстаёшь на ${Math.abs(devLoc).toFixed(1)} выездов` : devLoc > 0 ? `Опережаешь на ${devLoc.toFixed(1)} выездов` : 'В норме'}</div>
+      <div class="info">${locStatus}</div>
       ${locBreakdown.map(l => `<div class="card-row"><span class="lbl">${l.name}</span><span class="val">${l.count}</span></div>`).join('')}
     </div>
     <div class="card">
@@ -815,7 +839,7 @@ function openPersonCard(name) {
         <div style="text-align:right"><div class="big-num orange">${devLoad > 0 ? '+' : ''}${devLoad.toFixed(1)}</div><div class="big-sub">отклонение</div></div>
       </div>
       <div class="progress-bar"><div class="progress-fill orange" style="width:${loadPercent}%"></div></div>
-      <div class="info">${devLoad < 0 ? `Отстаёшь на ${Math.abs(devLoad).toFixed(1)}` : devLoad > 0 ? `Опережаешь на ${devLoad.toFixed(1)}` : 'В норме'}</div>
+      <div class="info">${loadStatus}</div>
     </div>
     <div class="card">
       <h2>📅 Последние выезды</h2>
@@ -992,7 +1016,7 @@ function renderActionLog() {
         if (d.locations && d.locations.length) text += d.locations.map(l => `${l.name} (${l.who.length}): ${l.who.join(', ')}`).join('; ');
         if (d.loading && d.loading.length) text += ` | Отгрузка: ${d.loading.join(', ')}`;
       } else if (a.type === 'dayoff') {
-        const labels = { full: 'полностью', noLoc: 'только с локаций', noLoad: 'только с отгрузки' };
+        const labels = { full: 'отсутствует весь день', noLoc: 'без локаций', noLoad: 'без отгрузки' };
         text = `${d.name} → ${d.value ? 'поставлен' : 'снят'} «${labels[d.field]}» на ${formatDate(d.date)}`;
       } else if (a.type === 'manual') text = `Вручную: ${d.name} → ${d.location}`;
       else if (a.type === 'cancel') text = `Отменено (${d.type}) за ${formatDate(d.date)}`;
@@ -1038,7 +1062,6 @@ function importData(event) {
       if (!state.manualLoad) state.manualLoad = [];
       if (!state.actionLog) state.actionLog = [];
       if (!state.pin) state.pin = DEFAULT_PIN;
-      // Миграция
       const sorted = [];
       for (let i = 0; i < DEFAULT_PEOPLE.length; i++) {
         const name = DEFAULT_PEOPLE[i];
