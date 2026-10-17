@@ -287,7 +287,20 @@ function getCatchUpCoef(name) {
   return c ? c.coef : 1.0;
 }
 
-// ============= СРЕДНЕЕ ПО КОМАНДЕ И ОТКЛОНЕНИЕ =============
+// ============= РАБОЧИЕ ДНИ =============
+function getWorkDays(name) {
+  let count = 0;
+  const today = new Date();
+  for (let i = 0; i < WINDOW_DAYS; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().slice(0, 10);
+    if (!isOnVacation(name, iso)) count++;
+  }
+  return count;
+}
+
+// ============= СРЕДНЕЕ ПО КОМАНДЕ =============
 function getAverageLocationTrips() {
   const today = todayIso();
   const available = state.people.filter(p => !isOnVacation(p.name, today));
@@ -371,15 +384,12 @@ function distributeLoadingByRotation(dateStr, need) {
 
   const selected = [];
   const usedNames = new Set();
-  const missing = [];
 
   for (const name of thisGroup) {
     if (selected.length >= need) break;
     if (canGoToLoading(name, dateStr)) {
       selected.push(name);
       usedNames.add(name);
-    } else {
-      missing.push(name);
     }
   }
 
@@ -766,7 +776,6 @@ function renderStats() {
     if (diff < -0.5) { status = `отстаёт на ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
     else if (diff > 0.5) { status = `опережает на ${diff.toFixed(1)}`; color = '#d93025'; }
     else { status = 'в среднем'; color = '#777'; }
-    // Обрати внимание: здесь data-name, а не onclick
     return `<div class="stat-row" data-name="${r.name}">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
         <span><b>${r.fact}</b> <span style="color:${color};font-size:12px">(${status})</span></span>
@@ -777,7 +786,6 @@ function renderStats() {
   }).join('');
   el.innerHTML = html;
 
-  // Отгрузки
   const el2 = document.getElementById('statsLoading');
   const rows2 = state.people.map(p => {
     const fact = state.loadCounts[p.name] || 0;
@@ -1118,18 +1126,13 @@ function confirmReset() {
   const pinInput = document.getElementById('pinInput');
   if (pinInput) pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPin(); });
   
-  // Тот самый надежный перехват кликов по статистике
   document.getElementById('statsList').addEventListener('click', (e) => {
     const row = e.target.closest('.stat-row');
-    if (row && row.dataset.name) {
-      openPersonCard(row.dataset.name);
-    }
+    if (row && row.dataset.name) openPersonCard(row.dataset.name);
   });
   document.getElementById('statsLoading').addEventListener('click', (e) => {
     const row = e.target.closest('.stat-row');
-    if (row && row.dataset.name) {
-      openPersonCard(row.dataset.name);
-    }
+    if (row && row.dataset.name) openPersonCard(row.dataset.name);
   });
 
   renderPlanTab(); renderJournal(); renderStats(); renderPeople();
