@@ -8,10 +8,10 @@ const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', '�
 const WINDOW_DAYS = 30;
 const K_LOCATION = 3;
 const K_LOADING = 5;
-const CATCHUP_RATE = 1.0;
-const CATCHUP_MIN_COEF = 0.3;
-const FRESH_PENALTY = 200;
-const DEVIATION_SCALE = 200;
+const CATCHUP_RATE = 1.5; // Усиленное догоняние
+const CATCHUP_MIN_COEF = 0.4; // Начинает с 40%
+const FRESH_PENALTY = 500; // Огромный штраф тем, кто недавно ездил (чтобы не пахали подряд)
+const DEVIATION_SCALE = 100;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
@@ -69,6 +69,10 @@ function loadState() {
       return p;
     }
   } catch(e) {}
+  return createFreshState();
+}
+
+function createFreshState() {
   return {
     people: DEFAULT_PEOPLE.map((name, i) => ({ id: i+1, name, noLoading: false, onlyLoading: false })),
     journal: [], loadingJournal: [],
@@ -83,6 +87,7 @@ function loadState() {
     lastCatchUpUpdate: ''
   };
 }
+
 function saveState() {
   try { localStorage.setItem('dutyApp', JSON.stringify(state)); } catch(e) {}
 }
@@ -262,7 +267,7 @@ function getPersonNumber(name) {
   return p ? p.id : 0;
 }
 
-// ============= ДОГОНЯНИЕ (для локаций) =============
+// ============= ДОГОНЯНИЕ =============
 function applyDailyCatchUp() {
   const today = todayIso();
   if (state.lastCatchUpUpdate === today) return;
@@ -285,7 +290,7 @@ function getCatchUpCoef(name) {
   return c ? c.coef : 1.0;
 }
 
-// ============= РАБОЧИЕ ДНИ И НОРМА (для локаций) =============
+// ============= РАБОЧИЕ ДНИ И НОРМА =============
 function getWorkDays(name) {
   let count = 0;
   const today = new Date();
@@ -314,28 +319,28 @@ function getDeviationLoading(name) {
   return (state.loadCounts[name] || 0) - getNormLoading(name);
 }
 
-// ============= СВЕЖЕСТЬ (для локаций) =============
+// ============= СВЕЖЕСТЬ (ПРОШЛЫЙ РАЗ = 3 ДНЯ) =============
 function wasOnLocationPrevDay(name, dateStr) {
-  const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - 1);
-  for (let i = 0; i < 7; i++) {
-    const iso = d.toISOString().slice(0, 10);
-    const dow = d.getDay(); const isWeekend = (dow === 0 || dow === 6);
-    if (state.journal.some(j => j.date === iso && j.who.includes(name))) return true;
-    if (!isWeekend) return false;
-    d.setDate(d.getDate() - 1);
-  }
-  return false;
+  const pastRecords = state.journal
+    .filter(j => j.date < dateStr && j.who.includes(name))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (pastRecords.length === 0) return false;
+  const lastDate = pastRecords[0].date;
+  const d1 = new Date(lastDate + 'T00:00:00');
+  const d2 = new Date(dateStr + 'T00:00:00');
+  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+  return diffDays <= 3;
 }
 function wasOnLoadingPrevDay(name, dateStr) {
-  const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - 1);
-  for (let i = 0; i < 7; i++) {
-    const iso = d.toISOString().slice(0, 10);
-    const dow = d.getDay(); const isWeekend = (dow === 0 || dow === 6);
-    if (state.loadingJournal.some(j => j.date === iso && j.who.includes(name))) return true;
-    if (!isWeekend) return false;
-    d.setDate(d.getDate() - 1);
-  }
-  return false;
+  const pastRecords = state.loadingJournal
+    .filter(j => j.date < dateStr && j.who.includes(name))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (pastRecords.length === 0) return false;
+  const lastDate = pastRecords[0].date;
+  const d1 = new Date(lastDate + 'T00:00:00');
+  const d2 = new Date(dateStr + 'T00:00:00');
+  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+  return diffDays <= 3;
 }
 
 // ============= ВЫХОД ИЗ ОТПУСКА =============
@@ -408,7 +413,6 @@ function distributeLoadingByRotation(dateStr, need) {
       usedNames.add(candidate);
     }
   }
-
   return { selected, groupNum };
 }
 
