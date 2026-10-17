@@ -1,4 +1,4 @@
-const CACHE_NAME = 'duty-v11';
+const CACHE_NAME = 'duty-v12';
 const FILES = ['./', './index.html', './style.css', './script.js', './manifest.json'];
 
 self.addEventListener('install', e => {
