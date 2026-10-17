@@ -701,6 +701,7 @@ function renderJournal() {
       const rows = items.map(j => `<div class="who"><b>${j.location}:</b> ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}${j.manual ? ' <i>(ручное)</i>' : ''}</div>`).join('');
       const note = items[0].note ? `<div class="note">${items[0].note}</div>` : '';
       const canEdit = date === todayIso() || date > todayIso();
+      // Кнопка отмены возвращена на место
       return `<div class="journal-item"><div class="date">${formatDate(date)}</div>${rows}${note}
         ${canEdit ? `<div class="journal-actions"><button class="mini" onclick="cancelDay('${date}')">↩️ Отменить день</button></div>` : ''}</div>`;
     }).join('');
@@ -717,6 +718,7 @@ function renderJournal() {
         return `<div class="who">Отгрузка${groupLabel} (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}</div>`;
       }).join('');
       const canEdit = date === todayIso() || date > todayIso();
+      // Кнопка отмены отгрузки
       return `<div class="journal-item"><div class="date orange">${formatDate(date)}</div>${rows}
         ${canEdit ? `<div class="journal-actions"><button class="mini" onclick="cancelLoadingDay('${date}')">↩️ Отменить</button></div>` : ''}</div>`;
     }).join('');
