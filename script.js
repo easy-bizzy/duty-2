@@ -6,11 +6,9 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-const K_LOCATION = 3;
-const K_LOADING = 5;
-const CATCHUP_RATE = 1.5; // Усиленное догоняние
-const CATCHUP_MIN_COEF = 0.4; // Начинает с 40%
-const FRESH_PENALTY = 500; // Огромный штраф тем, кто недавно ездил (чтобы не пахали подряд)
+const CATCHUP_RATE = 1.5; // Догоняет в 1.5 раза быстрее
+const CATCHUP_MIN_COEF = 0.4; 
+const FRESH_PENALTY = 500; // Огромный штраф тем, кто ездил недавно (чтобы не пахали подряд)
 const DEVIATION_SCALE = 100;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
@@ -290,33 +288,20 @@ function getCatchUpCoef(name) {
   return c ? c.coef : 1.0;
 }
 
-// ============= РАБОЧИЕ ДНИ И НОРМА =============
-function getWorkDays(name) {
-  let count = 0;
-  const today = new Date();
-  for (let i = 0; i < WINDOW_DAYS; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const iso = d.toISOString().slice(0, 10);
-    if (!isOnVacation(name, iso)) count++;
-  }
-  return count;
+// ============= СРЕДНЕЕ ПО КОМАНДЕ И ОТКЛОНЕНИЕ =============
+// Среднее количество выездов на локации (только среди тех, кто не в отпуске)
+function getAverageLocationTrips() {
+  const today = todayIso();
+  const available = state.people.filter(p => !isOnVacation(p.name, today));
+  if (available.length === 0) return 0;
+  const total = available.reduce((sum, p) => sum + (state.counts[p.name] || 0), 0);
+  return total / available.length;
 }
-function getNormLocation(name) {
-  const base = getWorkDays(name) / K_LOCATION;
-  const coef = getCatchUpCoef(name);
-  return base * (1 + (1 - coef));
-}
-function getNormLoading(name) {
-  const base = getWorkDays(name) / K_LOADING;
-  const coef = getCatchUpCoef(name);
-  return base * (1 + (1 - coef));
-}
+
+// Отклонение от среднего (меньше 0 = отстаёт, больше 0 = опережает)
 function getDeviationLocation(name) {
-  return (state.counts[name] || 0) - getNormLocation(name);
-}
-function getDeviationLoading(name) {
-  return (state.loadCounts[name] || 0) - getNormLoading(name);
+  const avg = getAverageLocationTrips();
+  return (state.counts[name] || 0) - avg;
 }
 
 // ============= СВЕЖЕСТЬ (ПРОШЛЫЙ РАЗ = 3 ДНЯ) =============
@@ -371,7 +356,9 @@ function getLocationLocPoints(name, locName) {
 function getLocationSortScore(name, dateStr) {
   const dev = getDeviationLocation(name);
   const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  return dev * DEVIATION_SCALE + fresh;
+  // Если в режиме догоняния, искусственно занижаем балл, чтобы он ехал чаще
+  const catchUpBonus = state.catchUp[name] ? -1000 : 0; 
+  return dev * DEVIATION_SCALE + fresh + catchUpBonus;
 }
 
 // ============= ОТГРУЗКА: РОТАЦИЯ ПО ТРОЙКАМ =============
@@ -674,7 +661,7 @@ function distribute() {
     html += '</ul>';
   }
   if (yesterdayInfo.length) {
-    html += '<div style="margin-top:12px;font-size:13px;color:#b06000;">🟡 Вчерашние:</div><ul style="font-size:13px;color:#b06000;">';
+    html += '<div style="margin-top:12px;font-size:13px;color:#b06000;">🟡 Ездили в прошлый раз:</div><ul style="font-size:13px;color:#b06000;">';
     for (const y of yesterdayInfo) html += `<li>${getPersonNumber(y.name)}. ${y.name} → ${y.location}</li>`;
     html += '</ul>';
   }
@@ -767,47 +754,44 @@ function renderProgressBar(fact, norm, color) {
 }
 
 function renderStats() {
+  const avg = getAverageLocationTrips();
   const el = document.getElementById('statsList');
   const rows = state.people.map(p => {
     const fact = state.counts[p.name] || 0;
-    const norm = getNormLocation(p.name);
-    const dev = fact - norm;
-    return { name: p.name, num: p.id, fact, norm, dev, breakdown: state.locCounts[p.name] || {} };
+    const dev = fact - avg;
+    return { name: p.name, num: p.id, fact, avg, dev, breakdown: state.locCounts[p.name] || {} };
   }).sort((a, b) => a.dev - b.dev);
-  el.innerHTML = rows.map(r => {
+  
+  let html = `<div style="font-size:13px; color:#666; margin-bottom:10px;">Среднее по команде: <b>${avg.toFixed(1)}</b> выездов</div>`;
+  
+  html += rows.map(r => {
     const parts = LOCATIONS.map(loc => `<span>${loc.name}: ${r.breakdown[loc.name] || 0}</span>`).join('');
     const diff = r.dev;
     let status, color;
-    if (diff < -0.5) { status = `осталось ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
-    else if (diff > 0.5) { status = `переработка +${diff.toFixed(1)}`; color = '#d93025'; }
-    else { status = 'в норме'; color = '#777'; }
+    if (diff < -0.5) { status = `отстаёт на ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
+    else if (diff > 0.5) { status = `опережает на ${diff.toFixed(1)}`; color = '#d93025'; }
+    else { status = 'в среднем'; color = '#777'; }
     return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
-        <span><b>${r.fact}</b> из ${r.norm.toFixed(1)} <span style="color:${color};font-size:12px">(${status})</span></span>
+        <span><b>${r.fact}</b> <span style="color:${color};font-size:12px">(${status})</span></span>
       </div>
-      ${renderProgressBar(r.fact, r.norm, 'blue')}
+      ${renderProgressBar(r.fact, Math.max(1, avg), 'blue')}
       <div class="stat-breakdown">${parts}</div>
     </div>`;
   }).join('');
+  el.innerHTML = html;
 
+  // Отгрузки (тут оставляем норму, так как отгрузка по тройкам)
   const el2 = document.getElementById('statsLoading');
   const rows2 = state.people.map(p => {
     const fact = state.loadCounts[p.name] || 0;
-    const norm = getNormLoading(p.name);
-    const dev = fact - norm;
-    return { name: p.name, num: p.id, fact, norm, dev };
-  }).sort((a, b) => a.dev - b.dev);
+    return { name: p.name, num: p.id, fact };
+  }).sort((a, b) => a.fact - b.fact);
   el2.innerHTML = rows2.map(r => {
-    const diff = r.dev;
-    let status, color;
-    if (diff < -0.5) { status = `осталось ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
-    else if (diff > 0.5) { status = `переработка +${diff.toFixed(1)}`; color = '#d93025'; }
-    else { status = 'в норме'; color = '#777'; }
     return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
-        <span><b>${r.fact}</b> из ${r.norm.toFixed(1)} <span style="color:${color};font-size:12px">(${status})</span></span>
+        <span><b>${r.fact}</b> отгрузок</span>
       </div>
-      ${renderProgressBar(r.fact, r.norm, 'orange')}
     </div>`;
   }).join('');
 }
@@ -825,10 +809,8 @@ function openPersonCard(name) {
   const totalLoc = state.counts[name] || 0;
   const totalLoad = state.loadCounts[name] || 0;
   const workDays = getWorkDays(name);
-  const normLoc = getNormLocation(name);
-  const normLoad = getNormLoading(name);
-  const devLoc = totalLoc - normLoc;
-  const devLoad = totalLoad - normLoad;
+  const avgLoc = getAverageLocationTrips();
+  const devLoc = totalLoc - avgLoc;
   const cu = state.catchUp[name];
   const locBreakdown = LOCATIONS.map(loc => ({
     name: loc.name,
@@ -838,13 +820,11 @@ function openPersonCard(name) {
   const loadHistory = state.loadingJournal.filter(j => j.who.includes(name)).slice(0, 15);
   const vacs = state.vacations[name] || [];
 
-  const locPercent = normLoc > 0 ? Math.min(100, (totalLoc / normLoc) * 100) : 0;
-  const loadPercent = normLoad > 0 ? Math.min(100, (totalLoad / normLoad) * 100) : 0;
+  const locPercent = avgLoc > 0 ? Math.min(100, (totalLoc / avgLoc) * 100) : 0;
+  const loadPercent = 0; // Отгрузки без нормы
 
   const locStatus = devLoc < -0.5 ? `Отстаёт на ${Math.abs(devLoc).toFixed(1)}` :
-                    devLoc > 0.5 ? `Переработка +${devLoc.toFixed(1)}` : 'В норме';
-  const loadStatus = devLoad < -0.5 ? `Отстаёт на ${Math.abs(devLoad).toFixed(1)}` :
-                     devLoad > 0.5 ? `Переработка +${devLoad.toFixed(1)}` : 'В норме';
+                    devLoc > 0.5 ? `Опережает на ${devLoc.toFixed(1)}` : 'В среднем';
 
   el.innerHTML = `
     <div class="card">
@@ -855,21 +835,18 @@ function openPersonCard(name) {
     <div class="card">
       <h2>🏭 Локации</h2>
       <div class="card-big">
-        <div><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${totalLoc}</div><div class="big-sub">из ${normLoc.toFixed(1)}</div></div>
-        <div style="text-align:right"><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${devLoc > 0 ? '+' : ''}${devLoc.toFixed(1)}</div><div class="big-sub">отклонение</div></div>
+        <div><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${totalLoc}</div><div class="big-sub">выездов</div></div>
+        <div style="text-align:right"><div class="big-num ${devLoc < -0.5 ? 'green' : (devLoc > 0.5 ? 'red' : '')}">${devLoc > 0 ? '+' : ''}${devLoc.toFixed(1)}</div><div class="big-sub">к среднему</div></div>
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${locPercent}%"></div></div>
-      <div class="info">${locStatus}</div>
+      <div class="info">Среднее по команде: ${avgLoc.toFixed(1)} (${locStatus})</div>
       ${locBreakdown.map(l => `<div class="card-row"><span class="lbl">${l.name}</span><span class="val">${l.count}</span></div>`).join('')}
     </div>
     <div class="card">
       <h2 class="orange">📦 Отгрузки</h2>
       <div class="card-big">
-        <div><div class="big-num orange">${totalLoad}</div><div class="big-sub">из ${normLoad.toFixed(1)}</div></div>
-        <div style="text-align:right"><div class="big-num orange">${devLoad > 0 ? '+' : ''}${devLoad.toFixed(1)}</div><div class="big-sub">отклонение</div></div>
+        <div><div class="big-num orange">${totalLoad}</div><div class="big-sub">отгрузок</div></div>
       </div>
-      <div class="progress-bar"><div class="progress-fill orange" style="width:${loadPercent}%"></div></div>
-      <div class="info">${loadStatus}</div>
     </div>
     <div class="card">
       <h2>📅 Последние выезды</h2>
