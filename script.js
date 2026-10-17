@@ -6,9 +6,9 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-const CATCHUP_RATE = 1.5; // Догоняет в 1.5 раза быстрее
+const CATCHUP_RATE = 1.5; 
 const CATCHUP_MIN_COEF = 0.4; 
-const FRESH_PENALTY = 500; // Огромный штраф тем, кто ездил недавно (чтобы не пахали подряд)
+const FRESH_PENALTY = 500; 
 const DEVIATION_SCALE = 100;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
@@ -289,7 +289,6 @@ function getCatchUpCoef(name) {
 }
 
 // ============= СРЕДНЕЕ ПО КОМАНДЕ И ОТКЛОНЕНИЕ =============
-// Среднее количество выездов на локации (только среди тех, кто не в отпуске)
 function getAverageLocationTrips() {
   const today = todayIso();
   const available = state.people.filter(p => !isOnVacation(p.name, today));
@@ -297,8 +296,6 @@ function getAverageLocationTrips() {
   const total = available.reduce((sum, p) => sum + (state.counts[p.name] || 0), 0);
   return total / available.length;
 }
-
-// Отклонение от среднего (меньше 0 = отстаёт, больше 0 = опережает)
 function getDeviationLocation(name) {
   const avg = getAverageLocationTrips();
   return (state.counts[name] || 0) - avg;
@@ -356,7 +353,6 @@ function getLocationLocPoints(name, locName) {
 function getLocationSortScore(name, dateStr) {
   const dev = getDeviationLocation(name);
   const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  // Если в режиме догоняния, искусственно занижаем балл, чтобы он ехал чаще
   const catchUpBonus = state.catchUp[name] ? -1000 : 0; 
   return dev * DEVIATION_SCALE + fresh + catchUpBonus;
 }
@@ -802,7 +798,7 @@ function resetStats() {
   logAction('reset_stats', {});
 }
 
-// ============= КАРТОЧКА =============
+// ============= КАРТОЧКА ЧЕЛОВЕКА =============
 function openPersonCard(name) {
   const el = document.getElementById('personCardContent');
   const num = getPersonNumber(name);
@@ -821,7 +817,6 @@ function openPersonCard(name) {
   const vacs = state.vacations[name] || [];
 
   const locPercent = avgLoc > 0 ? Math.min(100, (totalLoc / avgLoc) * 100) : 0;
-  const loadPercent = 0; // Отгрузки без нормы
 
   const locStatus = devLoc < -0.5 ? `Отстаёт на ${Math.abs(devLoc).toFixed(1)}` :
                     devLoc > 0.5 ? `Опережает на ${devLoc.toFixed(1)}` : 'В среднем';
