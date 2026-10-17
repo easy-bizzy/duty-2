@@ -14,7 +14,6 @@ const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
 
-// === ТРОЙКИ ДЛЯ ОТГРУЗКИ ===
 const LOADING_GROUPS = {
   1: ['Печерских', 'Репин', 'Сабуров'],
   2: ['Торопов', 'Сурнин', 'Осинкин']
@@ -767,7 +766,8 @@ function renderStats() {
     if (diff < -0.5) { status = `отстаёт на ${Math.abs(diff).toFixed(1)}`; color = '#137333'; }
     else if (diff > 0.5) { status = `опережает на ${diff.toFixed(1)}`; color = '#d93025'; }
     else { status = 'в среднем'; color = '#777'; }
-    return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
+    // Обрати внимание: здесь data-name, а не onclick
+    return `<div class="stat-row" data-name="${r.name}">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
         <span><b>${r.fact}</b> <span style="color:${color};font-size:12px">(${status})</span></span>
       </div>
@@ -777,14 +777,14 @@ function renderStats() {
   }).join('');
   el.innerHTML = html;
 
-  // Отгрузки (тут оставляем норму, так как отгрузка по тройкам)
+  // Отгрузки
   const el2 = document.getElementById('statsLoading');
   const rows2 = state.people.map(p => {
     const fact = state.loadCounts[p.name] || 0;
     return { name: p.name, num: p.id, fact };
   }).sort((a, b) => a.fact - b.fact);
   el2.innerHTML = rows2.map(r => {
-    return `<div class="stat-row" onclick="openPersonCard('${r.name}')">
+    return `<div class="stat-row" data-name="${r.name}">
       <div class="stat-top"><span><span class="num">${r.num}</span>${r.name}</span>
         <span><b>${r.fact}</b> отгрузок</span>
       </div>
@@ -1117,6 +1117,21 @@ function confirmReset() {
   document.getElementById('planDate').addEventListener('change', renderPlanTab);
   const pinInput = document.getElementById('pinInput');
   if (pinInput) pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPin(); });
+  
+  // Тот самый надежный перехват кликов по статистике
+  document.getElementById('statsList').addEventListener('click', (e) => {
+    const row = e.target.closest('.stat-row');
+    if (row && row.dataset.name) {
+      openPersonCard(row.dataset.name);
+    }
+  });
+  document.getElementById('statsLoading').addEventListener('click', (e) => {
+    const row = e.target.closest('.stat-row');
+    if (row && row.dataset.name) {
+      openPersonCard(row.dataset.name);
+    }
+  });
+
   renderPlanTab(); renderJournal(); renderStats(); renderPeople();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('service-worker.js').catch(() => {});
