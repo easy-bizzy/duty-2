@@ -16,6 +16,12 @@ const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
 
+// === ТРОЙКИ ДЛЯ ОТГРУЗКИ ===
+const LOADING_GROUPS = {
+  1: ['Печерских', 'Репин', 'Сабуров'],
+  2: ['Торопов', 'Сурнин', 'Осинкин']
+};
+
 let state = loadState();
 let currentTab = 'plan';
 let pinSession = false;
@@ -39,8 +45,8 @@ function loadState() {
       if (!p.manualLoad) p.manualLoad = [];
       if (!p.actionLog) p.actionLog = [];
       if (!p.pin) p.pin = DEFAULT_PIN;
-      if (!p.wantLoadingToday) p.wantLoadingToday = {};
       if (!p.onlyLoadToday) p.onlyLoadToday = {};
+      if (!p.rotation) p.rotation = { counter1: 0, counter2: 0 };
 
       if (!p.people) {
         p.people = DEFAULT_PEOPLE.map((name, i) => ({ id: i+1, name, noLoading: false, onlyLoading: false }));
@@ -70,9 +76,9 @@ function loadState() {
     vacations: {}, dayOffs: {},
     catchUp: {},
     manualLoc: [], manualLoad: [],
-    wantLoadingToday: {},
     onlyLoadToday: {},
     actionLog: [],
+    rotation: { counter1: 0, counter2: 0 },
     pin: DEFAULT_PIN,
     lastCatchUpUpdate: ''
   };
@@ -222,9 +228,6 @@ function isOnlyLoadingPermanent(name) {
 function isOnlyLoadToday(name, dateStr) {
   return (state.onlyLoadToday[dateStr] || []).includes(name);
 }
-function wantsLoading(name, dateStr) {
-  return (state.wantLoadingToday[dateStr] || []).includes(name);
-}
 function canGoToLocation(name, dateStr) {
   if (isOnVacation(name, dateStr)) return false;
   const t = dayOffType(name, dateStr);
@@ -259,7 +262,7 @@ function getPersonNumber(name) {
   return p ? p.id : 0;
 }
 
-// ============= ДОГОНЯНИЕ =============
+// ============= ДОГОНЯНИЕ (для локаций) =============
 function applyDailyCatchUp() {
   const today = todayIso();
   if (state.lastCatchUpUpdate === today) return;
@@ -282,7 +285,7 @@ function getCatchUpCoef(name) {
   return c ? c.coef : 1.0;
 }
 
-// ============= РАБОЧИЕ ДНИ И НОРМА =============
+// ============= РАБОЧИЕ ДНИ И НОРМА (для локаций) =============
 function getWorkDays(name) {
   let count = 0;
   const today = new Date();
@@ -294,8 +297,6 @@ function getWorkDays(name) {
   }
   return count;
 }
-
-// Норма с коэффициентом догоняния
 function getNormLocation(name) {
   const base = getWorkDays(name) / K_LOCATION;
   const coef = getCatchUpCoef(name);
@@ -313,7 +314,7 @@ function getDeviationLoading(name) {
   return (state.loadCounts[name] || 0) - getNormLoading(name);
 }
 
-// ============= СВЕЖЕСТЬ =============
+// ============= СВЕЖЕСТЬ (для локаций) =============
 function wasOnLocationPrevDay(name, dateStr) {
   const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - 1);
   for (let i = 0; i < 7; i++) {
@@ -361,24 +362,60 @@ function getLocationLocPoints(name, locName) {
   return (state.locCounts[name] && state.locCounts[name][locName]) || 0;
 }
 
-// ============= СОРТИРОВКА (полностью независимо) =============
+// ============= СОРТИРОВКА ЛОКАЦИЙ =============
 function getLocationSortScore(name, dateStr) {
   const dev = getDeviationLocation(name);
   const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
   return dev * DEVIATION_SCALE + fresh;
 }
-function getLoadingSortScore(name, dateStr) {
-  const dev = getDeviationLoading(name);
-  const fresh = wasOnLoadingPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  const wants = wantsLoading(name, dateStr) ? -300 : 0;
-  return dev * DEVIATION_SCALE + fresh + wants;
+
+// ============= ОТГРУЗКА: РОТАЦИЯ ПО ТРОЙКАМ =============
+function getTodayLoadingGroup(dateStr) {
+  const prev = state.loadingJournal.find(j => j.date < dateStr);
+  if (!prev) return 1;
+  return prev.group === 1 ? 2 : 1;
+}
+
+function distributeLoadingByRotation(dateStr, need) {
+  const groupNum = getTodayLoadingGroup(dateStr);
+  const thisGroup = LOADING_GROUPS[groupNum];
+  const otherGroup = LOADING_GROUPS[groupNum === 1 ? 2 : 1];
+  const counterKey = groupNum === 1 ? 'counter1' : 'counter2';
+
+  const selected = [];
+  const usedNames = new Set();
+  const missing = [];
+
+  for (const name of thisGroup) {
+    if (selected.length >= need) break;
+    if (canGoToLoading(name, dateStr)) {
+      selected.push(name);
+      usedNames.add(name);
+    } else {
+      missing.push(name);
+    }
+  }
+
+  let safeGuard = 0;
+  while (selected.length < need && safeGuard < 100) {
+    safeGuard++;
+    const idx = state.rotation[counterKey] % otherGroup.length;
+    const candidate = otherGroup[idx];
+    state.rotation[counterKey] = (state.rotation[counterKey] + 1) % otherGroup.length;
+
+    if (canGoToLoading(candidate, dateStr) && !usedNames.has(candidate)) {
+      selected.push(candidate);
+      usedNames.add(candidate);
+    }
+  }
+
+  return { selected, groupNum };
 }
 
 // ============= ПЛАН =============
 function renderPlanTab() {
   renderManualSelectors();
   renderDayOffLists();
-  renderWantLoading();
   renderOnlyLoadToday();
   renderManualPending();
 }
@@ -436,29 +473,6 @@ function toggleDayOff(date, name, field, checked) {
   saveState();
   renderDayOffLists();
   renderManualSelectors();
-}
-function renderWantLoading() {
-  const date = document.getElementById('planDate').value;
-  const el = document.getElementById('wantLoadingList');
-  if (!el) return;
-  const list = state.wantLoadingToday[date] || [];
-  el.innerHTML = state.people.filter(p => canGoToLoading(p.name, date)).map(p => {
-    const checked = list.includes(p.name);
-    return `<div class="check-row">
-      <input type="checkbox" id="want_${p.id}" ${checked ? 'checked' : ''}
-        onchange="toggleWantLoading('${date}', '${p.name}', this.checked)">
-      <label for="want_${p.id}"><span class="num">${p.id}</span>${p.name}</label>
-    </div>`;
-  }).join('') || '<div class="empty">Все заняты</div>';
-}
-function toggleWantLoading(date, name, checked) {
-  if (!state.wantLoadingToday[date]) state.wantLoadingToday[date] = [];
-  const list = state.wantLoadingToday[date];
-  if (checked) { if (!list.includes(name)) list.push(name); }
-  else { const i = list.indexOf(name); if (i >= 0) list.splice(i, 1); }
-  if (list.length === 0) delete state.wantLoadingToday[date];
-  saveState();
-  logAction('want_loading', { name, value: checked, date });
 }
 function renderOnlyLoadToday() {
   const date = document.getElementById('planDate').value;
@@ -578,17 +592,20 @@ function distribute() {
     manualLoadData.push({ name: n, num: getPersonNumber(n) });
     usedLoad.add(n);
   }
+
   let loadingWho = [...manualLoadData];
+  let groupNum = null;
   if (loadingNeed > 0) {
-    const candidates = state.people.filter(p => canGoToLoading(p.name, date) && !usedLoad.has(p.name));
-    candidates.sort((a, b) => {
-      const sa = getLoadingSortScore(a.name, date), sb = getLoadingSortScore(b.name, date);
-      if (sa !== sb) return sa - sb;
-      return a.id - b.id;
-    });
     const remaining = Math.max(0, loadingNeed - loadingWho.length);
-    for (const p of candidates.slice(0, remaining)) {
-      loadingWho.push({ name: p.name, num: p.id });
+    if (remaining > 0) {
+      const result = distributeLoadingByRotation(date, remaining);
+      groupNum = result.groupNum;
+      for (const name of result.selected) {
+        if (!usedLoad.has(name)) {
+          loadingWho.push({ name, num: getPersonNumber(name) });
+          usedLoad.add(name);
+        }
+      }
     }
   }
 
@@ -612,7 +629,12 @@ function distribute() {
     }
   }
   if (loadingWho.length) {
-    state.loadingJournal.unshift({ date, who: loadingWho.map(w => w.name), note });
+    state.loadingJournal.unshift({
+      date,
+      who: loadingWho.map(w => w.name),
+      note,
+      group: groupNum
+    });
     for (const w of loadingWho) state.loadCounts[w.name] = (state.loadCounts[w.name] || 0) + 1;
   }
 
@@ -623,7 +645,8 @@ function distribute() {
   logAction('distribute', {
     date,
     locations: assignments.map(a => ({ name: a.location.name, who: a.who.map(w => w.name) })),
-    loading: loadingWho.map(w => w.name)
+    loading: loadingWho.map(w => w.name),
+    loadingGroup: groupNum
   });
 
   let html = '';
@@ -641,7 +664,8 @@ function distribute() {
     }
   }
   if (loadingWho.length) {
-    html += '<div style="font-weight:600;color:#e8710a;margin-top:12px;">📦 Отгрузка:</div><ul>';
+    const groupLabel = groupNum ? ` (тройка ${groupNum})` : '';
+    html += `<div style="font-weight:600;color:#e8710a;margin-top:12px;">📦 Отгрузка${groupLabel}:</div><ul>`;
     for (const w of loadingWho) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
     html += '</ul>';
   }
@@ -659,7 +683,6 @@ function distribute() {
   document.getElementById('loc4').value = 0;
   document.getElementById('loadingCount').value = 0;
   if (state.dayOffs[date]) delete state.dayOffs[date];
-  if (state.wantLoadingToday[date]) delete state.wantLoadingToday[date];
   if (state.onlyLoadToday[date]) delete state.onlyLoadToday[date];
   saveState();
   renderPlanTab();
@@ -693,7 +716,10 @@ function renderJournal() {
     for (const j of state.loadingJournal) { if (!byDate[j.date]) byDate[j.date] = []; byDate[j.date].push(j); }
     el2.innerHTML = Object.keys(byDate).sort().reverse().map(date => {
       const items = byDate[date];
-      const rows = items.map(j => `<div class="who">Отгрузка (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}</div>`).join('');
+      const rows = items.map(j => {
+        const groupLabel = j.group ? ` (тройка ${j.group})` : '';
+        return `<div class="who">Отгрузка${groupLabel} (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}</div>`;
+      }).join('');
       const canEdit = date === todayIso() || date > todayIso();
       return `<div class="journal-item"><div class="date orange">${formatDate(date)}</div>${rows}
         ${canEdit ? `<div class="journal-actions"><button class="mini" onclick="cancelLoadingDay('${date}')">↩️ Отменить</button></div>` : ''}</div>`;
@@ -729,7 +755,7 @@ function cancelLoadingDay(date) {
   logAction('cancel', { date, type: 'loading' });
 }
 
-// ============= СТАТИСТИКА (прогресс-бары) =============
+// ============= СТАТИСТИКА =============
 function renderProgressBar(fact, norm, color) {
   const percent = norm > 0 ? Math.min(100, (fact / norm) * 100) : 0;
   const cls = color === 'orange' ? 'progress-fill orange' : 'progress-fill';
@@ -966,10 +992,19 @@ function renderSettings() {
         <button class="secondary" onclick="resetStats()">♻️ Сбросить статистику</button>
       </div>
       <div class="settings-row">
+        <button class="secondary" onclick="resetRotation()">🔄 Сбросить счётчик ротации</button>
+      </div>
+      <div class="settings-row">
         <button class="danger" onclick="confirmReset()">🔄 Сбросить всё</button>
       </div>
     </div>
   `;
+}
+function resetRotation() {
+  if (!confirm('Сбросить счётчики замены? Следующая замена начнётся с первого человека.')) return;
+  state.rotation = { counter1: 0, counter2: 0 };
+  saveState();
+  alert('✅ Счётчики сброшены');
 }
 function openActionLog() {
   extendPinSession();
@@ -1004,7 +1039,7 @@ function renderActionLog() {
     'distribute': 'распределение', 'dayoff': 'отсутствие', 'manual': 'ручное',
     'cancel': 'отмена', 'vacation': 'отпуск', 'reset_stats': 'сброс статы',
     'pin_change': 'PIN', 'toggle': 'галочка', 'import': 'импорт',
-    'want_loading': 'хочет на отгрузку', 'only_load_today': 'только отгрузка'
+    'only_load_today': 'только отгрузка'
   };
   let html = '<div class="card"><h2>🔒 Журнал действий</h2>';
   html += Object.keys(byDate).sort().reverse().map(date => {
@@ -1014,7 +1049,11 @@ function renderActionLog() {
       if (a.type === 'distribute') {
         text = `Распределено на ${formatDate(d.date)}: `;
         if (d.locations && d.locations.length) text += d.locations.map(l => `${l.name} (${l.who.length}): ${l.who.join(', ')}`).join('; ');
-        if (d.loading && d.loading.length) text += ` | Отгрузка: ${d.loading.join(', ')}`;
+        if (d.loading && d.loading.length) {
+          text += ` | Отгрузка`;
+          if (d.loadingGroup) text += ` (тройка ${d.loadingGroup})`;
+          text += `: ${d.loading.join(', ')}`;
+        }
       } else if (a.type === 'dayoff') {
         const labels = { full: 'отсутствует весь день', noLoc: 'без локаций', noLoad: 'без отгрузки' };
         text = `${d.name} → ${d.value ? 'поставлен' : 'снят'} «${labels[d.field]}» на ${formatDate(d.date)}`;
@@ -1025,7 +1064,6 @@ function renderActionLog() {
       else if (a.type === 'pin_change') text = `PIN изменён`;
       else if (a.type === 'toggle') text = `${d.name}: «${d.field}» = ${d.value}`;
       else if (a.type === 'import') text = `Импорт данных`;
-      else if (a.type === 'want_loading') text = `${d.name}: хочет на отгрузку (${formatDate(d.date)}) = ${d.value}`;
       else if (a.type === 'only_load_today') text = `${d.name}: только отгрузка (${formatDate(d.date)}) = ${d.value}`;
       else text = JSON.stringify(d);
       return `<div class="actionlog-item">
@@ -1056,11 +1094,12 @@ function importData(event) {
       const data = JSON.parse(e.target.result);
       if (!data.people || !data.journal) throw new Error('bad');
       state = data;
-      ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','wantLoadingToday','onlyLoadToday'].forEach(k => { if (!state[k]) state[k] = {}; });
+      ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday'].forEach(k => { if (!state[k]) state[k] = {}; });
       if (!state.loadingJournal) state.loadingJournal = [];
       if (!state.manualLoc) state.manualLoc = [];
       if (!state.manualLoad) state.manualLoad = [];
       if (!state.actionLog) state.actionLog = [];
+      if (!state.rotation) state.rotation = { counter1: 0, counter2: 0 };
       if (!state.pin) state.pin = DEFAULT_PIN;
       const sorted = [];
       for (let i = 0; i < DEFAULT_PEOPLE.length; i++) {
