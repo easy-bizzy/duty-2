@@ -8,7 +8,8 @@ const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', '�
 const WINDOW_DAYS = 30;
 const CATCHUP_RATE = 1.5; 
 const CATCHUP_MIN_COEF = 0.4; 
-const FRESH_PENALTY = 500; 
+// Штраф за недавний выезд уменьшен до 150, чтобы люди не застревали внизу
+const FRESH_PENALTY = 150; 
 const DEVIATION_SCALE = 100;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
@@ -313,7 +314,7 @@ function getDeviationLocation(name) {
   return (state.counts[name] || 0) - avg;
 }
 
-// ============= СВЕЖЕСТЬ (ПРОШЛЫЙ РАЗ = 3 ДНЯ) =============
+// ============= СВЕЖЕСТЬ =============
 function wasOnLocationPrevDay(name, dateStr) {
   const pastRecords = state.journal
     .filter(j => j.date < dateStr && j.who.includes(name))
@@ -323,18 +324,7 @@ function wasOnLocationPrevDay(name, dateStr) {
   const d1 = new Date(lastDate + 'T00:00:00');
   const d2 = new Date(dateStr + 'T00:00:00');
   const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-  return diffDays <= 3;
-}
-function wasOnLoadingPrevDay(name, dateStr) {
-  const pastRecords = state.loadingJournal
-    .filter(j => j.date < dateStr && j.who.includes(name))
-    .sort((a, b) => b.date.localeCompare(a.date));
-  if (pastRecords.length === 0) return false;
-  const lastDate = pastRecords[0].date;
-  const d1 = new Date(lastDate + 'T00:00:00');
-  const d2 = new Date(dateStr + 'T00:00:00');
-  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-  return diffDays <= 3;
+  return diffDays <= 2; // Штраф даем, только если ездил 1 или 2 дня назад
 }
 
 // ============= ВЫХОД ИЗ ОТПУСКА =============
@@ -365,7 +355,8 @@ function getLocationLocPoints(name, locName) {
 function getLocationSortScore(name, dateStr) {
   const dev = getDeviationLocation(name);
   const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  const catchUpBonus = state.catchUp[name] ? -1000 : 0; 
+  // Бонус догоняния теперь -300. Он помогает, но не ломает очередь
+  const catchUpBonus = state.catchUp[name] ? -300 : 0; 
   return dev * DEVIATION_SCALE + fresh + catchUpBonus;
 }
 
@@ -547,7 +538,6 @@ function distribute() {
 
   const usedLoc = new Set();
   const assignments = [];
-  const yesterdayInfo = [];
 
   const manualLocData = [];
   for (const m of state.manualLoc) {
@@ -573,7 +563,6 @@ function distribute() {
     const selected = candidates.slice(0, req.need);
     selected.forEach(p => {
       usedLoc.add(p.name);
-      if (wasOnLocationPrevDay(p.name, date)) yesterdayInfo.push({ name: p.name, location: locName });
     });
     assignments.push({
       location: req.location,
@@ -665,11 +654,6 @@ function distribute() {
     for (const w of loadingWho) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
     html += '</ul>';
   }
-  if (yesterdayInfo.length) {
-    html += '<div style="margin-top:12px;font-size:13px;color:#b06000;">🟡 Ездили в прошлый раз:</div><ul style="font-size:13px;color:#b06000;">';
-    for (const y of yesterdayInfo) html += `<li>${getPersonNumber(y.name)}. ${y.name} → ${y.location}</li>`;
-    html += '</ul>';
-  }
   if (absentInfo.length) html += `<div style="margin-top:10px;font-size:13px;color:#666;">Отсутствуют: ${absentInfo.join(', ')}</div>`;
   showResult(html, false);
 
@@ -701,7 +685,6 @@ function renderJournal() {
       const rows = items.map(j => `<div class="who"><b>${j.location}:</b> ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}${j.manual ? ' <i>(ручное)</i>' : ''}</div>`).join('');
       const note = items[0].note ? `<div class="note">${items[0].note}</div>` : '';
       const canEdit = date === todayIso() || date > todayIso();
-      // Кнопка отмены возвращена на место
       return `<div class="journal-item"><div class="date">${formatDate(date)}</div>${rows}${note}
         ${canEdit ? `<div class="journal-actions"><button class="mini" onclick="cancelDay('${date}')">↩️ Отменить день</button></div>` : ''}</div>`;
     }).join('');
@@ -718,7 +701,6 @@ function renderJournal() {
         return `<div class="who">Отгрузка${groupLabel} (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}</div>`;
       }).join('');
       const canEdit = date === todayIso() || date > todayIso();
-      // Кнопка отмены отгрузки
       return `<div class="journal-item"><div class="date orange">${formatDate(date)}</div>${rows}
         ${canEdit ? `<div class="journal-actions"><button class="mini" onclick="cancelLoadingDay('${date}')">↩️ Отменить</button></div>` : ''}</div>`;
     }).join('');
