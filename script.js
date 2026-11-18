@@ -31,7 +31,7 @@ let pinCallback = null;
 // ============= ХРАНИЛИЩЕ =============
 function loadState() {
   try {
-    const raw = localStorage.getItem('dutyApp');
+    const raw = DutyStorage.read();
     if (raw) {
       const p = JSON.parse(raw);
       ['locCounts','loadCounts','vacations','dayOffs','catchUp','counts'].forEach(k => {
@@ -66,7 +66,10 @@ function loadState() {
       }
       return p;
     }
-  } catch(e) {}
+  } catch(e) {
+    DutyStorage.fail(e);
+    throw e;
+  }
   return createFreshState();
 }
 
@@ -87,7 +90,7 @@ function createFreshState() {
 }
 
 function saveState() {
-  try { localStorage.setItem('dutyApp', JSON.stringify(state)); } catch(e) {}
+  try { DutyStorage.write(state); return true; } catch(e) { DutyStorage.fail(e); return false; }
 }
 
 window.addEventListener('beforeunload', saveState);
@@ -1058,8 +1061,11 @@ function importData(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
+    const previousState = state;
     try {
       const data = JSON.parse(e.target.result);
+      DutyStorage.validate(data);
+      DutyStorage.backup('before-import');
       if (!data.people || !data.journal) throw new Error('bad');
       state = data;
       ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday'].forEach(k => { if (!state[k]) state[k] = {}; });
@@ -1083,11 +1089,11 @@ function importData(event) {
         }
       }
       state.people = sorted;
-      saveState();
+      if (!saveState()) throw new Error('Не удалось сохранить импорт');
       logAction('import', {});
       renderPeople(); renderJournal(); renderStats(); renderPlanTab();
       alert('✅ Восстановлено');
-    } catch (err) { alert('❌ Ошибка'); }
+    } catch (err) { state = previousState; alert('❌ Импорт не выполнен: ' + err.message); }
   };
   reader.readAsText(file);
 }
@@ -1096,7 +1102,8 @@ function confirmReset() {
   if (!confirm('🛑 Последнее предупреждение.')) return;
   const word = prompt('Введи УДАЛИТЬ капсом:');
   if (word !== 'УДАЛИТЬ') { alert('Отменено'); return; }
-  localStorage.removeItem('dutyApp');
+  DutyStorage.backup('before-reset');
+  DutyStorage.remove();
   state = loadState(); saveState();
   renderPeople(); renderJournal(); renderStats(); renderPlanTab();
   showResult('', false);
@@ -1121,6 +1128,7 @@ function confirmReset() {
 
   renderPlanTab(); renderJournal(); renderStats(); renderPeople();
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    setupDutyUpdates();
   }
 })();
+

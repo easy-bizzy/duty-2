@@ -1,0 +1,62 @@
+/* Keep original dutyApp data; never recover by silently creating an empty state. */
+const DutyStorage = (() => {
+  const KEY='dutyApp', VERSION='14-safe-update';
+  let expected, blocked=false;
+  function validate(data) {
+    if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
+    for(const key of ['journal','loadingJournal']) if(data[key]!==undefined && (!Array.isArray(data[key]) || data[key].some(j=>!j || typeof j.date!=='string' || !Array.isArray(j.who) || j.who.some(n=>typeof n!=='string')))) throw Error('Повреждён журнал '+key);
+    if(data.people.some(p=>!p || typeof p.name!=='string')) throw Error('Повреждён список сотрудников');
+    for(const key of ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday','rotation']) if(data[key]!==undefined && (!data[key] || typeof data[key]!=='object' || Array.isArray(data[key]))) throw Error('Повреждены настройки '+key);
+    for(const key of ['manualLoc','manualLoad','actionLog']) if(data[key]!==undefined && !Array.isArray(data[key])) throw Error('Повреждены настройки '+key);
+    return data;
+  }
+  function rawBackup(raw,name) {
+    if(raw===null) return;
+    const key=KEY+':backup:'+name;
+    localStorage.setItem(key,raw);
+    if(localStorage.getItem(key)!==raw) throw Error('Не удалось проверить резервную копию');
+  }
+  function read() {
+    expected=localStorage.getItem(KEY);
+    if(expected!==null) {
+      if(localStorage.getItem(KEY+':backup:before-'+VERSION)===null) rawBackup(expected,'before-'+VERSION);
+      validate(JSON.parse(expected));
+    }
+    return expected;
+  }
+  function check() {
+    if(blocked) throw Error('Сохранение остановлено для защиты истории');
+    if(localStorage.getItem(KEY)!==expected) throw Error('Данные изменены в другом окне. Закройте это окно и откройте программу снова');
+  }
+  function write(data) {
+    check(); validate(data);
+    const next=JSON.stringify(data);
+    if(next===expected) return;
+    rawBackup(expected,'previous');
+    localStorage.setItem(KEY,next);
+    if(localStorage.getItem(KEY)!==next) throw Error('Не удалось проверить сохранение');
+    expected=next;
+  }
+  function backup(name) { check(); rawBackup(expected,name); return expected; }
+  function remove() { check(); localStorage.removeItem(KEY); expected=null; }
+  function download(raw,name) {
+    const url=URL.createObjectURL(new Blob([raw],{type:'application/json'}));
+    const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }
+  function fail(error) {
+    blocked=true;
+    if(document.getElementById('storageFailure')) return;
+    const box=document.createElement('div'); box.id='storageFailure';
+    box.style.cssText='position:fixed;inset:0;z-index:10000;background:white;color:#900;padding:30px;overflow:auto';
+    const label=document.createElement('p'); label.textContent='Сохранение остановлено. Не очищайте данные браузера. '+error.message;
+    const button=document.createElement('button'); button.textContent='Скачать данные для восстановления';
+    button.onclick=()=>{
+      const copies={};
+      for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k===KEY || k.startsWith(KEY+':backup:')) copies[k]=localStorage.getItem(k);}
+      download(JSON.stringify(copies,null,2),'duty-recovery.json');
+    };
+    box.append(label,button); document.body.appendChild(box);
+  }
+  return {read,write,backup,remove,validate,fail,download,VERSION};
+})();
