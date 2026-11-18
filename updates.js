@@ -1,6 +1,6 @@
 async function setupDutyUpdates() {
   const status=document.createElement('div');
-  status.style.cssText='padding:12px;background:#e8f0fe;color:#174ea6';
+  status.className='update-status';
   document.querySelector('header').after(status);
   status.textContent='Версия '+DutyStorage.VERSION;
   let registration, installing=false, downloadedRaw=null;

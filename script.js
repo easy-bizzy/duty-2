@@ -16,8 +16,8 @@ const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
 
 const LOADING_GROUPS = {
-  1: ['Печерских', 'Репин', 'Сабуров'],
-  2: ['Торопов', 'Сурнин', 'Осинкин']
+  1: ['Печерских', 'Репин', 'Осинкин'],
+  2: ['Сурнин', 'Торопов', 'Сабуров']
 };
 
 let state = loadState();
@@ -187,7 +187,7 @@ function switchTab(name, btn) {
   document.getElementById('headerTitle').textContent =
     name === 'person' ? '👤 Карточка' :
     name === 'settings' ? '⚙️ Настройки' :
-    name === 'actionlog' ? '🔒 Журнал действий' : '📋 Дежурства';
+    name === 'actionlog' ? '🔒 Журнал действий' : 'ORACLE';
   if (name === 'journal') renderJournal();
   if (name === 'stats') renderStats();
   if (name === 'people') renderPeople();
@@ -365,23 +365,23 @@ function getLocationSortScore(name, dateStr) {
 
 // ============= ОТГРУЗКА: РОТАЦИЯ ПО ТРОЙКАМ =============
 function getTodayLoadingGroup(dateStr) {
-  const prev = state.loadingJournal.find(j => j.date < dateStr);
+  const prev = state.loadingJournal.filter(j => j.date < dateStr && (j.group === 1 || j.group === 2)).sort((a,b) => b.date.localeCompare(a.date))[0];
   if (!prev) return 1;
   return prev.group === 1 ? 2 : 1;
 }
 
-function distributeLoadingByRotation(dateStr, need) {
+function distributeLoadingByRotation(dateStr, need, excluded = new Set()) {
   const groupNum = getTodayLoadingGroup(dateStr);
   const thisGroup = LOADING_GROUPS[groupNum];
   const otherGroup = LOADING_GROUPS[groupNum === 1 ? 2 : 1];
   const counterKey = groupNum === 1 ? 'counter1' : 'counter2';
 
   const selected = [];
-  const usedNames = new Set();
+  const usedNames = new Set(excluded);
 
   for (const name of thisGroup) {
     if (selected.length >= need) break;
-    if (canGoToLoading(name, dateStr)) {
+    if (canGoToLoading(name, dateStr) && !usedNames.has(name)) {
       selected.push(name);
       usedNames.add(name);
     }
@@ -576,17 +576,17 @@ function distribute() {
   const manualLoadData = [];
   const usedLoad = new Set();
   for (const n of state.manualLoad) {
-    if (!canGoToLoading(n, date)) continue;
+    if (!canGoToLoading(n, date) || usedLoad.has(n)) continue;
     manualLoadData.push({ name: n, num: getPersonNumber(n) });
     usedLoad.add(n);
   }
 
   let loadingWho = [...manualLoadData];
-  let groupNum = null;
+  let groupNum = loadingWho.length || loadingNeed > 0 ? getTodayLoadingGroup(date) : null;
   if (loadingNeed > 0) {
     const remaining = Math.max(0, loadingNeed - loadingWho.length);
     if (remaining > 0) {
-      const result = distributeLoadingByRotation(date, remaining);
+      const result = distributeLoadingByRotation(date, remaining, usedLoad);
       groupNum = result.groupNum;
       for (const name of result.selected) {
         if (!usedLoad.has(name)) {
@@ -937,7 +937,7 @@ function renderSettings() {
   const el = document.getElementById('settingsContent');
   el.innerHTML = `
     <div class="card">
-      <h2>🔐 Безопасность</h2>
+      <h2>ORACLE</h2><p class="info">Operational Rotation And Crew Load Equalizer</p><p class="info">Ротация сотрудников и выравнивание нагрузки</p></div><div class="card"><h2>🔐 Безопасность</h2>
       <div class="settings-row">
         <div class="label">Журнал действий</div>
         <button class="secondary" onclick="openActionLog()">🔒 Открыть журнал</button>

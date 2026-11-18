@@ -14,11 +14,11 @@ test('legacy startup preserves journals, settings, counters and exact original b
  const t=setup(original);vm.runInContext(app,t.context);t.run('saveState()');
  const next=JSON.parse(t.data.get('dutyApp')),old=JSON.parse(original);
  for(const key of ['journal','loadingJournal','counts','loadCounts','pin','vacations','custom']) assert.deepEqual(next[key],old[key]);
- assert.equal(t.data.get('dutyApp:backup:before-14-safe-update'),original);
+ assert.equal(t.data.get('dutyApp:backup:before-15-ORACLE'),original);
  t.run("DutyStorage.backup('before-update')");const snapshot=t.data.get('dutyApp');
  const again=setup(snapshot);vm.runInContext(app,again.context);again.run('saveState()');assert.equal(again.data.get('dutyApp'),snapshot);
 });
-test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-14-safe-update'),'{broken');});
+test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-15-ORACLE'),'{broken');});
 test('quota error blocks change without losing current data',()=>{const t=setup(original);t.run('DutyStorage.read()');t.deny();assert.throws(()=>t.run("DutyStorage.write({...JSON.parse(DutyStorage.read()),pin:'9999'})"));assert.equal(t.data.get('dutyApp'),original);});
 test('stale tab cannot overwrite newer history',()=>{const t=setup(original);t.run('DutyStorage.read()');t.data.set('dutyApp',original+' ');assert.throws(()=>t.run('DutyStorage.write({people:[],journal:[]})'));assert.equal(t.data.get('dutyApp'),original+' ');});
 test('invalid import rejected before changing storage',()=>{const t=setup(original);t.run('DutyStorage.read()');assert.throws(()=>t.run('DutyStorage.validate({people:[],journal:{}})'));assert.equal(t.data.get('dutyApp'),original);});

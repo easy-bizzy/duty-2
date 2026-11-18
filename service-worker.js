@@ -1,5 +1,5 @@
-const CACHE_NAME='duty-v14-safe-update';
-const FILES=['./','./index.html','./style.css','./script.js','./manifest.json','./safe-storage.js','./updates.js'];
+const CACHE_NAME='duty-v15-oracle';
+const FILES=['./','./index.html','./style.css','./script.js','./manifest.json','./safe-storage.js','./updates.js','./branding.js'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(FILES.map(url=>new Request(url,{cache:'reload'})))));
   // No skipWaiting: installation must not interrupt the running application.

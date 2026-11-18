@@ -1,6 +1,6 @@
 /* Keep original dutyApp data; never recover by silently creating an empty state. */
 const DutyStorage = (() => {
-  const KEY='dutyApp', VERSION='14-safe-update';
+  const KEY='dutyApp', VERSION='15-ORACLE';
   let expected, blocked=false;
   function validate(data) {
     if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
