@@ -249,7 +249,7 @@ function canGoToLoading(name, dateStr) {
   if (isNoLoadPermanent(name)) return false;
   return true;
 }
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { const d = new Date(); return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-'); }
 function formatDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
@@ -539,6 +539,7 @@ function distribute() {
     showResult('⚠️ Укажите хотя бы одно действие', true); return;
   }
 
+  const shortages = [];
   const usedLoc = new Set();
   const assignments = [];
 
@@ -564,6 +565,7 @@ function distribute() {
       return a.id - b.id;
     });
     const selected = candidates.slice(0, req.need);
+    if (selected.length < req.need) shortages.push(`${locName}: не хватает ${req.need - selected.length}`);
     selected.forEach(p => {
       usedLoc.add(p.name);
     });
@@ -597,6 +599,7 @@ function distribute() {
     }
   }
 
+  if (loadingWho.length < loadingNeed) shortages.push(`Отгрузка: не хватает ${loadingNeed - loadingWho.length}`);
   const d = state.dayOffs[date] || { full: [], noLoc: [], noLoad: [] };
   const absentInfo = [];
   for (const p of state.people) {
@@ -609,7 +612,7 @@ function distribute() {
   const note = absentInfo.length ? 'Отсутствовали: ' + absentInfo.join(', ') : '';
 
   for (const a of assignments) {
-    state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), note });
+    if (a.who.length) state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), note });
     for (const w of a.who) {
       state.counts[w.name] = (state.counts[w.name] || 0) + 1;
       if (!state.locCounts[w.name]) state.locCounts[w.name] = {};
@@ -657,6 +660,7 @@ function distribute() {
     for (const w of loadingWho) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
     html += '</ul>';
   }
+  if (shortages.length) html += `<div class="shortage">⚠️ ${shortages.join('; ')}</div>`;
   if (absentInfo.length) html += `<div style="margin-top:10px;font-size:13px;color:#666;">Отсутствуют: ${absentInfo.join(', ')}</div>`;
   showResult(html, false);
 
@@ -665,8 +669,6 @@ function distribute() {
   document.getElementById('loc3').value = 0;
   document.getElementById('loc4').value = 0;
   document.getElementById('loadingCount').value = 0;
-  if (state.dayOffs[date]) delete state.dayOffs[date];
-  if (state.onlyLoadToday[date]) delete state.onlyLoadToday[date];
   saveState();
   renderPlanTab();
 }

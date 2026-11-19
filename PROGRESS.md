@@ -25,3 +25,5 @@ Repository: easy-bizzy/duty-2. Work branch: safe-offline-update. Draft PR #1. Pr
 
 ## Resume
 Read this file and UPDATE-NOTES.md, inspect draft branch diff. Run `node --test tests/*.cjs`. Do not redo completed repository discovery or re-create PR. Save new checkpoints in this branch. Preserve main until ready for safe rollout.
+
+2026-11-19: Claude audit supplied in upload/file8.zip. Local uncommitted fixes in script.js: preserve dayOffs/onlyLoadToday after distribution; avoid empty location journal entries and show shortages; todayIso uses local calendar. 12 old tests pass, new regression tests and GitHub sync pending. Audit notes critical manual silent drop, storage migration failure, recovery UX, and algorithm fairness not yet addressed. Do not deploy.
