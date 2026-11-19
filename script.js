@@ -6,18 +6,15 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-const CATCHUP_RATE = 1.5; 
-const CATCHUP_MIN_COEF = 0.4; 
-// Штраф за недавний выезд уменьшен до 150, чтобы люди не застревали внизу
-const FRESH_PENALTY = 150; 
-const DEVIATION_SCALE = 100;
+// At most one and a half days of extra queue age; yesterday still comes last.
+const VACATION_QUEUE_BOOST_DAYS = 1.5;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
 
 const LOADING_GROUPS = {
-  1: ['Печерских', 'Репин', 'Сабуров'],
-  2: ['Торопов', 'Сурнин', 'Осинкин']
+  1: ['Печерских', 'Репин', 'Осинкин'],
+  2: ['Сурнин', 'Торопов', 'Сабуров']
 };
 
 let state = loadState();
@@ -31,7 +28,7 @@ let pinCallback = null;
 // ============= ХРАНИЛИЩЕ =============
 function loadState() {
   try {
-    const raw = localStorage.getItem('dutyApp');
+    const raw = DutyStorage.read();
     if (raw) {
       const p = JSON.parse(raw);
       ['locCounts','loadCounts','vacations','dayOffs','catchUp','counts'].forEach(k => {
@@ -66,7 +63,10 @@ function loadState() {
       }
       return p;
     }
-  } catch(e) {}
+  } catch(e) {
+    DutyStorage.fail(e);
+    throw e;
+  }
   return createFreshState();
 }
 
@@ -87,7 +87,7 @@ function createFreshState() {
 }
 
 function saveState() {
-  try { localStorage.setItem('dutyApp', JSON.stringify(state)); } catch(e) {}
+  try { DutyStorage.write(state); return true; } catch(e) { DutyStorage.fail(e); return false; }
 }
 
 window.addEventListener('beforeunload', saveState);
@@ -184,7 +184,7 @@ function switchTab(name, btn) {
   document.getElementById('headerTitle').textContent =
     name === 'person' ? '👤 Карточка' :
     name === 'settings' ? '⚙️ Настройки' :
-    name === 'actionlog' ? '🔒 Журнал действий' : '📋 Дежурства';
+    name === 'actionlog' ? '🔒 Журнал действий' : 'ORACLE';
   if (name === 'journal') renderJournal();
   if (name === 'stats') renderStats();
   if (name === 'people') renderPeople();
@@ -246,7 +246,7 @@ function canGoToLoading(name, dateStr) {
   if (isNoLoadPermanent(name)) return false;
   return true;
 }
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { const d = new Date(); return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-'); }
 function formatDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
@@ -271,21 +271,12 @@ function applyDailyCatchUp() {
   if (state.lastCatchUpUpdate === today) return;
   state.lastCatchUpUpdate = today;
   for (const name in state.catchUp) {
-    const c = state.catchUp[name];
-    c.coef = Math.min(1.0, c.coef + c.step);
-    c.daysLeft -= 1;
-    if (c.daysLeft <= 0 || c.coef >= 1.0) delete state.catchUp[name];
+    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
   }
   saveState();
 }
 function registerVacationEnd(name, daysAbsent) {
-  const catchUpDays = Math.max(1, Math.round(daysAbsent * CATCHUP_RATE));
-  const step = (1.0 - CATCHUP_MIN_COEF) / catchUpDays;
-  state.catchUp[name] = { coef: CATCHUP_MIN_COEF, daysLeft: catchUpDays, step, daysAbsent };
-}
-function getCatchUpCoef(name) {
-  const c = state.catchUp[name];
-  return c ? c.coef : 1.0;
+  if ((state.counts[name] || 0) < getAverageLocationTrips()) state.catchUp[name] = { daysAbsent };
 }
 
 // ============= РАБОЧИЕ ДНИ =============
@@ -315,16 +306,12 @@ function getDeviationLocation(name) {
 }
 
 // ============= СВЕЖЕСТЬ =============
-function wasOnLocationPrevDay(name, dateStr) {
-  const pastRecords = state.journal
-    .filter(j => j.date < dateStr && j.who.includes(name))
-    .sort((a, b) => b.date.localeCompare(a.date));
-  if (pastRecords.length === 0) return false;
-  const lastDate = pastRecords[0].date;
-  const d1 = new Date(lastDate + 'T00:00:00');
-  const d2 = new Date(dateStr + 'T00:00:00');
-  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-  return diffDays <= 2; // Штраф даем, только если ездил 1 или 2 дня назад
+function lastLocationDate(name, dateStr) {
+  let latest = '';
+  for (const j of state.journal) {
+    if (j.date <= dateStr && j.date > latest && j.who.includes(name)) latest = j.date;
+  }
+  return latest;
 }
 
 // ============= ВЫХОД ИЗ ОТПУСКА =============
@@ -353,32 +340,40 @@ function getLocationLocPoints(name, locName) {
 
 // ============= СОРТИРОВКА ЛОКАЦИЙ =============
 function getLocationSortScore(name, dateStr) {
-  const dev = getDeviationLocation(name);
-  const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  // Бонус догоняния теперь -300. Он помогает, но не ломает очередь
-  const catchUpBonus = state.catchUp[name] ? -300 : 0; 
-  return dev * DEVIATION_SCALE + fresh + catchUpBonus;
+  const last = lastLocationDate(name, dateStr);
+  const age = last ? Math.max(0, (Date.parse(dateStr+'T00:00:00Z') - Date.parse(last+'T00:00:00Z')) / 86400000) : 365;
+  const behind = (state.counts[name] || 0) < getAverageLocationTrips();
+  const vacationBoost = state.catchUp[name] && behind ? VACATION_QUEUE_BOOST_DAYS : 0;
+  // A small count tie-breaker also helps ordinary workers with fewer trips.
+  const countBalance = Math.max(-1, Math.min(1, getDeviationLocation(name))) * 0.15;
+  return -age - vacationBoost + countBalance;
+}
+function recentLocationTier(name, dateStr) {
+  const last=lastLocationDate(name,dateStr);
+  if(last===dateStr) return 2;
+  if(last && Date.parse(dateStr+'T00:00:00Z')-Date.parse(last+'T00:00:00Z')===86400000) return 1;
+  return 0;
 }
 
 // ============= ОТГРУЗКА: РОТАЦИЯ ПО ТРОЙКАМ =============
 function getTodayLoadingGroup(dateStr) {
-  const prev = state.loadingJournal.find(j => j.date < dateStr);
+  const prev = state.loadingJournal.filter(j => j.date < dateStr && (j.group === 1 || j.group === 2)).sort((a,b) => b.date.localeCompare(a.date))[0];
   if (!prev) return 1;
   return prev.group === 1 ? 2 : 1;
 }
 
-function distributeLoadingByRotation(dateStr, need) {
+function distributeLoadingByRotation(dateStr, need, excluded = new Set()) {
   const groupNum = getTodayLoadingGroup(dateStr);
   const thisGroup = LOADING_GROUPS[groupNum];
   const otherGroup = LOADING_GROUPS[groupNum === 1 ? 2 : 1];
   const counterKey = groupNum === 1 ? 'counter1' : 'counter2';
 
   const selected = [];
-  const usedNames = new Set();
+  const usedNames = new Set(excluded);
 
   for (const name of thisGroup) {
     if (selected.length >= need) break;
-    if (canGoToLoading(name, dateStr)) {
+    if (canGoToLoading(name, dateStr) && !usedNames.has(name)) {
       selected.push(name);
       usedNames.add(name);
     }
@@ -524,6 +519,20 @@ function removeManualLoad(i) { state.manualLoad.splice(i, 1); saveState(); rende
 function distribute() {
   const date = document.getElementById('planDate').value;
   if (!date) { showResult('⚠️ Укажите дату', true); return; }
+
+  const unavailable = [];
+  for (const m of state.manualLoc) {
+    if (!canGoToLocation(m.name, date)) unavailable.push(`${m.name} — ${m.location} (недоступен для локаций)`);
+  }
+  for (const name of state.manualLoad) {
+    if (!canGoToLoading(name, date)) unavailable.push(`${name} — отгрузка (недоступен для отгрузки)`);
+  }
+  if (unavailable.length) {
+    const el = document.getElementById('planResult');
+    el.className = 'result warn';
+    el.textContent = '⚠️ Проверьте ручные назначения на ' + formatDate(date) + ': ' + unavailable.join('; ') + '. Измените отсутствие или удалите назначение и повторите распределение. Данные не изменены.';
+    return;
+  }
   for (const p of state.people) checkVacationReturn(p.name, date);
 
   const requests = LOCATIONS.map(loc => ({
@@ -536,12 +545,12 @@ function distribute() {
     showResult('⚠️ Укажите хотя бы одно действие', true); return;
   }
 
+  const shortages = [];
   const usedLoc = new Set();
   const assignments = [];
 
   const manualLocData = [];
   for (const m of state.manualLoc) {
-    if (!canGoToLocation(m.name, date)) continue;
     usedLoc.add(m.name);
     manualLocData.push(m);
     state.journal.unshift({ date, location: m.location, who: [m.name], note: 'Ручное', manual: true });
@@ -552,8 +561,13 @@ function distribute() {
 
   for (const req of requests) {
     const locName = req.location.name;
-    const candidates = state.people.filter(p => !usedLoc.has(p.name) && canGoToLocation(p.name, date));
+    const candidates = state.people.filter(p => canGoToLocation(p.name, date));
     candidates.sort((a, b) => {
+      // Spread one click over the whole crew first, then reuse people for another location.
+      const usedA=usedLoc.has(a.name)?1:0, usedB=usedLoc.has(b.name)?1:0;
+      if(usedA!==usedB) return usedA-usedB;
+      const tierA=recentLocationTier(a.name,date), tierB=recentLocationTier(b.name,date);
+      if(tierA!==tierB) return tierA-tierB;
       const sa = getLocationSortScore(a.name, date), sb = getLocationSortScore(b.name, date);
       if (sa !== sb) return sa - sb;
       const la = getLocationLocPoints(a.name, locName), lb = getLocationLocPoints(b.name, locName);
@@ -561,6 +575,7 @@ function distribute() {
       return a.id - b.id;
     });
     const selected = candidates.slice(0, req.need);
+    if (selected.length < req.need) shortages.push(`${locName}: не хватает ${req.need - selected.length}`);
     selected.forEach(p => {
       usedLoc.add(p.name);
     });
@@ -573,17 +588,17 @@ function distribute() {
   const manualLoadData = [];
   const usedLoad = new Set();
   for (const n of state.manualLoad) {
-    if (!canGoToLoading(n, date)) continue;
+    if (usedLoad.has(n)) continue;
     manualLoadData.push({ name: n, num: getPersonNumber(n) });
     usedLoad.add(n);
   }
 
   let loadingWho = [...manualLoadData];
-  let groupNum = null;
+  let groupNum = loadingWho.length || loadingNeed > 0 ? getTodayLoadingGroup(date) : null;
   if (loadingNeed > 0) {
     const remaining = Math.max(0, loadingNeed - loadingWho.length);
     if (remaining > 0) {
-      const result = distributeLoadingByRotation(date, remaining);
+      const result = distributeLoadingByRotation(date, remaining, usedLoad);
       groupNum = result.groupNum;
       for (const name of result.selected) {
         if (!usedLoad.has(name)) {
@@ -594,6 +609,7 @@ function distribute() {
     }
   }
 
+  if (loadingWho.length < loadingNeed) shortages.push(`Отгрузка: не хватает ${loadingNeed - loadingWho.length}`);
   const d = state.dayOffs[date] || { full: [], noLoc: [], noLoad: [] };
   const absentInfo = [];
   for (const p of state.people) {
@@ -606,12 +622,15 @@ function distribute() {
   const note = absentInfo.length ? 'Отсутствовали: ' + absentInfo.join(', ') : '';
 
   for (const a of assignments) {
-    state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), note });
+    if (a.who.length) state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), note });
     for (const w of a.who) {
       state.counts[w.name] = (state.counts[w.name] || 0) + 1;
       if (!state.locCounts[w.name]) state.locCounts[w.name] = {};
       state.locCounts[w.name][a.location.name] = (state.locCounts[w.name][a.location.name] || 0) + 1;
     }
+  }
+  for (const name of Object.keys(state.catchUp)) {
+    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
   }
   if (loadingWho.length) {
     state.loadingJournal.unshift({
@@ -654,6 +673,7 @@ function distribute() {
     for (const w of loadingWho) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
     html += '</ul>';
   }
+  if (shortages.length) html += `<div class="shortage">⚠️ ${shortages.join('; ')}</div>`;
   if (absentInfo.length) html += `<div style="margin-top:10px;font-size:13px;color:#666;">Отсутствуют: ${absentInfo.join(', ')}</div>`;
   showResult(html, false);
 
@@ -662,8 +682,6 @@ function distribute() {
   document.getElementById('loc3').value = 0;
   document.getElementById('loc4').value = 0;
   document.getElementById('loadingCount').value = 0;
-  if (state.dayOffs[date]) delete state.dayOffs[date];
-  if (state.onlyLoadToday[date]) delete state.onlyLoadToday[date];
   saveState();
   renderPlanTab();
 }
@@ -816,7 +834,7 @@ function openPersonCard(name) {
   el.innerHTML = `
     <div class="card">
       <h2>👤 ${num}. ${name}</h2>
-      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">${Math.round(cu.coef*100)}%</span></div>` : ''}
+      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">Умеренный приоритет</span></div>` : ''}
       <div class="card-row"><span class="lbl">Рабочих дней за 30 дн.</span><span class="val">${workDays}</span></div>
     </div>
     <div class="card">
@@ -934,7 +952,7 @@ function renderSettings() {
   const el = document.getElementById('settingsContent');
   el.innerHTML = `
     <div class="card">
-      <h2>🔐 Безопасность</h2>
+      <h2>ORACLE</h2><p class="info">Operational Rotation And Crew Load Equalizer</p><p class="info">Ротация сотрудников и выравнивание нагрузки</p></div><div class="card"><h2>🔐 Безопасность</h2>
       <div class="settings-row">
         <div class="label">Журнал действий</div>
         <button class="secondary" onclick="openActionLog()">🔒 Открыть журнал</button>
@@ -953,6 +971,10 @@ function renderSettings() {
         <button class="secondary" onclick="document.getElementById('importFile').click()">📥 Импорт</button>
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
       </div>
+      <div class="settings-row">
+        <button class="secondary" onclick="DutyStorage.showCopies(document.getElementById('settingsBackups'))">🗂 Сохранённые копии</button>
+      </div>
+      <div id="settingsBackups"></div>
     </div>
     <div class="card danger-card">
       <h2 class="red">⚠️ Опасная зона</h2>
@@ -1058,8 +1080,11 @@ function importData(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
+    const previousState = state;
     try {
       const data = JSON.parse(e.target.result);
+      DutyStorage.validate(data);
+      DutyStorage.backup('before-import');
       if (!data.people || !data.journal) throw new Error('bad');
       state = data;
       ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday'].forEach(k => { if (!state[k]) state[k] = {}; });
@@ -1083,11 +1108,11 @@ function importData(event) {
         }
       }
       state.people = sorted;
-      saveState();
+      if (!saveState()) throw new Error('Не удалось сохранить импорт');
       logAction('import', {});
       renderPeople(); renderJournal(); renderStats(); renderPlanTab();
       alert('✅ Восстановлено');
-    } catch (err) { alert('❌ Ошибка'); }
+    } catch (err) { state = previousState; alert('❌ Импорт не выполнен: ' + err.message); }
   };
   reader.readAsText(file);
 }
@@ -1096,7 +1121,8 @@ function confirmReset() {
   if (!confirm('🛑 Последнее предупреждение.')) return;
   const word = prompt('Введи УДАЛИТЬ капсом:');
   if (word !== 'УДАЛИТЬ') { alert('Отменено'); return; }
-  localStorage.removeItem('dutyApp');
+  DutyStorage.backup('before-reset');
+  DutyStorage.remove();
   state = loadState(); saveState();
   renderPeople(); renderJournal(); renderStats(); renderPlanTab();
   showResult('', false);
@@ -1121,6 +1147,7 @@ function confirmReset() {
 
   renderPlanTab(); renderJournal(); renderStats(); renderPeople();
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    setupDutyUpdates();
   }
 })();
+

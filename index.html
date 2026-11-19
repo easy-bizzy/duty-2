@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#1a73e8">
+<meta name="theme-color" content="#12263a">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css">
-<title>Дежурства</title>
+<title>ORACLE — локации и отгрузки</title>
 </head>
 <body>
 
 <header>
   <button class="back-btn" id="backBtn" style="display:none" onclick="goBack()">←</button>
-  <h1 id="headerTitle">📋 Дежурства</h1>
+  <div class="brand"><h1 id="headerTitle">ORACLE</h1><span class="brand-subtitle">Локации и отгрузки</span></div><span id="networkStatus" class="network-status" role="status"></span>
   <button class="settings-btn" id="settingsBtn" onclick="openSettings()">⚙️</button>
 </header>
 
 <div id="tab-plan" class="tab active">
   <div class="card">
-    <h2>Новый выезд</h2>
+    <div class="section-eyebrow">ПЛАН НА ДЕНЬ</div><h2>Новое распределение</h2>
     <label>Дата</label>
     <input type="date" id="planDate">
     <div class="title">🏭 Локации</div>
@@ -46,12 +46,6 @@
   </div>
 
   <div class="card">
-    <h2 class="orange">✋ Хотят на отгрузку сегодня</h2>
-    <p class="info">Кто отметился — берут первыми</p>
-    <div id="wantLoadingList"></div>
-  </div>
-
-  <div class="card">
     <h2>🚫 Не хотят на локации сегодня</h2>
     <p class="info">Только отгрузка (без локаций)</p>
     <div id="onlyLoadTodayList"></div>
@@ -63,7 +57,7 @@
     <div id="dayoffList"></div>
   </div>
 
-  <button onclick="distribute()">🚀 Распределить</button>
+  <button onclick="distribute()">Распределить команду →</button>
   <div id="planResult"></div>
 </div>
 
@@ -127,6 +121,10 @@
   <button onclick="switchTab('people', this)"><span>👥</span>Люди</button>
 </nav>
 
+<script src="branding.js"></script>
+<script src="safe-storage.js"></script>
+<script src="updates.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
+
