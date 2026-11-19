@@ -14,17 +14,18 @@ test('legacy startup preserves journals, settings, counters and exact original b
  const t=setup(original);vm.runInContext(app,t.context);t.run('saveState()');
  const next=JSON.parse(t.data.get('dutyApp')),old=JSON.parse(original);
  for(const key of ['journal','loadingJournal','counts','loadCounts','pin','vacations','custom']) assert.deepEqual(next[key],old[key]);
- assert.equal(t.data.get('dutyApp:backup:before-16-ORACLE'),original);
+ assert.equal(t.data.get('dutyApp:backup:before-17-ORACLE'),original);
  t.run("DutyStorage.backup('before-update')");const snapshot=t.data.get('dutyApp');
  const again=setup(snapshot);vm.runInContext(app,again.context);again.run('saveState()');assert.equal(again.data.get('dutyApp'),snapshot);
 });
-test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-16-ORACLE'),'{broken');});
+test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-17-ORACLE'),'{broken');});
 test('restoring a copy preserves current bytes and leaves source copy intact',()=>{
  const t=setup(original);t.run('DutyStorage.read()');t.run("DutyStorage.backup('before-update')");
  const source=t.run('DutyStorage.copies().find(k=>k.includes("before-update"))');
  t.run('DutyStorage.write({...JSON.parse(DutyStorage.read()),pin:"1111"})');
  t.context.location={reload(){}};
  t.run(`DutyStorage.restore(${JSON.stringify(source)})`);
+ t.run('DutyStorage.write({people:[],journal:[]})'); // simulates the old tab saving on beforeunload
  assert.equal(t.data.get('dutyApp'),original);
  assert.equal(t.data.get(source),original);
  assert.ok(Array.from(t.data).some(([k,v])=>k.includes('before-restore-') && JSON.parse(v).pin==='1111'));

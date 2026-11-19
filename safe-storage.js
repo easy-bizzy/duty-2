@@ -1,7 +1,7 @@
 /* Keep original dutyApp data; never recover by silently creating an empty state. */
 const DutyStorage = (() => {
-  const KEY='dutyApp', VERSION='16-ORACLE';
-  let expected, blocked=false;
+  const KEY='dutyApp', VERSION='17-ORACLE';
+  let expected, blocked=false, restoring=false;
   function validate(data) {
     if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
     for(const key of ['journal','loadingJournal']) if(data[key]!==undefined && (!Array.isArray(data[key]) || data[key].some(j=>!j || typeof j.date!=='string' || !Array.isArray(j.who)))) throw Error('Повреждён журнал '+key);
@@ -29,6 +29,7 @@ const DutyStorage = (() => {
     if(localStorage.getItem(KEY)!==expected) throw Error('Данные изменены в другом окне. Закройте это окно и откройте программу снова');
   }
   function write(data) {
+    if(restoring) return; // beforeunload must not write the old in-memory state over a restored copy.
     check(); validate(data);
     const next=JSON.stringify(data);
     if(next===expected) return;
@@ -60,7 +61,7 @@ const DutyStorage = (() => {
     if(current!==null) rawBackup(current,'before-restore-'+Date.now());
     localStorage.setItem(KEY,raw);
     if(localStorage.getItem(KEY)!==raw) throw Error('Не удалось проверить восстановление');
-    expected=raw; blocked=false;
+    expected=raw; blocked=false; restoring=true;
     location.reload();
   }
   function remove() { check(); localStorage.removeItem(KEY); expected=null; }

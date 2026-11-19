@@ -1,6 +1,6 @@
-# ORACLE — checkpoint, 2026-11-18
+# ORACLE — release notes, 2026-11-19
 
-Repository: easy-bizzy/duty-2. Work branch: safe-offline-update. Draft PR #1. Production main has NOT been changed.
+Repository: easy-bizzy/duty-2. PR #1 merged into main on 2026-11-19; GitHub Pages deployment succeeded. Release fix for backup restore follows as version 17-ORACLE.
 
 ## User requirements
 - 6 workers. Same person may do loading and location on same day; multiple location trips per day are legitimate. Manual trips override automatic order and remain in history.
@@ -31,3 +31,5 @@ Read this file and UPDATE-NOTES.md, inspect draft branch diff. Run `node --test 
 2026-11-19 continuation: Prior fixes committed as a7cf318. Manual unavailable worker now blocks entire distribution with an explanation and retains pending entries. Settings and emergency overlay list local backups; restore validates a selected copy and saves exact current bytes first. Explicit backups now have distinct names, version/cache bumped to 16-ORACLE, legacy journal validation allows older entry shapes. All 14 node tests pass. Remaining: test actual old phone export/import and browser migration; improve location fairness and multiple automatic same-day assignments; investigate quota and malformed legacy journal compatibility. Do not merge/deploy main yet.
 
 2026-11-19 release preparation: Replaced the -300 vacation bonus with a capped 1.5 day queue age advantage, active only while below team average. Same-day/yesterday trips rank after other workers; if all have travelled, the algorithm still assigns. Reuse across distinct locations in a single click when needed, recording separate journal entries. The old fixed 4/5 peer-wait rule is not used. 19 Node tests pass, including 1-place, 7-place, returnee and repeat-day cases. Main has not yet been updated at this checkpoint. A real phone export and offline reload remain post-publication user checks; no access to phone data in workspace.
+
+2026-11-19 post-publication: Main merged at 2fc4a7f; Pages build succeeded and live ORACLE 16 was observed after closing the legacy tab. Found and fixed restoration overwrite on beforeunload; version/cache bumped to 17. A real phone's history remains untested because no phone data or session is available. The user must export JSON on each phone, then verify history/settings and offline startup after updating.
