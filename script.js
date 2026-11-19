@@ -6,8 +6,9 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-// At most one and a half days of extra queue age; yesterday still comes last.
+// Normal vacation priority; an overdue 30-day catch-up may also travel yesterday/today.
 const VACATION_QUEUE_BOOST_DAYS = 1.5;
+const CATCHUP_DAYS = 30;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
@@ -246,6 +247,9 @@ function canGoToLoading(name, dateStr) {
   if (isNoLoadPermanent(name)) return false;
   return true;
 }
+function canAssignManually(name,dateStr) {
+  return state.people.some(p=>p.name===name) && !isOnVacation(name,dateStr) && dayOffType(name,dateStr)!=='full';
+}
 function todayIso() { const d = new Date(); return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-'); }
 function formatDate(iso) {
   if (!iso) return '';
@@ -271,12 +275,34 @@ function applyDailyCatchUp() {
   if (state.lastCatchUpUpdate === today) return;
   state.lastCatchUpUpdate = today;
   for (const name in state.catchUp) {
-    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
+    if ((state.counts[name] || 0) >= getPeerAverageTrips(name)) delete state.catchUp[name];
   }
   saveState();
 }
-function registerVacationEnd(name, daysAbsent) {
-  if ((state.counts[name] || 0) < getAverageLocationTrips()) state.catchUp[name] = { daysAbsent };
+function getPeerAverageTrips(name) {
+  const peers=state.people.filter(p=>p.name!==name);
+  return peers.length ? peers.reduce((total,p)=>total+(state.counts[p.name]||0),0)/peers.length : 0;
+}
+function dateOffset(iso,days) {
+  const date=new Date(iso+'T00:00:00Z'); date.setUTCDate(date.getUTCDate()+days);
+  return date.toISOString().slice(0,10);
+}
+function registerVacationEnd(name, daysAbsent, dateStr) {
+  const initialGap=Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0));
+  if(initialGap>0) state.catchUp[name]={start:dateStr,deadline:dateOffset(dateStr,CATCHUP_DAYS-1),initialGap,daysAbsent};
+}
+function getCatchUpUrgency(name,dateStr) {
+  const plan=state.catchUp[name];
+  if(!plan) return 0;
+  // Existing phones can have an earlier version's catch-up record without a start date.
+  if(!plan.start || !Number.isFinite(plan.initialGap)) {
+    plan.start=dateStr;
+    plan.deadline=dateOffset(dateStr,CATCHUP_DAYS-1);
+    plan.initialGap=Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0));
+  }
+  const elapsed=Math.max(0,Math.min(CATCHUP_DAYS-1,Math.round((Date.parse(dateStr+'T00:00:00Z')-Date.parse(plan.start+'T00:00:00Z'))/86400000)));
+  const remainingTarget=plan.initialGap*Math.max(0,1-(elapsed+1)/CATCHUP_DAYS);
+  return Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0)-remainingTarget);
 }
 
 // ============= РАБОЧИЕ ДНИ =============
@@ -327,7 +353,7 @@ function checkVacationReturn(name, dateStr) {
       const from = new Date(vac.from + 'T00:00:00');
       const to = new Date(vac.to + 'T00:00:00');
       const days = Math.round((to - from) / 86400000) + 1;
-      registerVacationEnd(name, days);
+      registerVacationEnd(name, days, dateStr);
       saveState();
     }
   }
@@ -342,13 +368,14 @@ function getLocationLocPoints(name, locName) {
 function getLocationSortScore(name, dateStr) {
   const last = lastLocationDate(name, dateStr);
   const age = last ? Math.max(0, (Date.parse(dateStr+'T00:00:00Z') - Date.parse(last+'T00:00:00Z')) / 86400000) : 365;
-  const behind = (state.counts[name] || 0) < getAverageLocationTrips();
+  const behind = (state.counts[name] || 0) < getPeerAverageTrips(name);
   const vacationBoost = state.catchUp[name] && behind ? VACATION_QUEUE_BOOST_DAYS : 0;
   // A small count tie-breaker also helps ordinary workers with fewer trips.
   const countBalance = Math.max(-1, Math.min(1, getDeviationLocation(name))) * 0.15;
   return -age - vacationBoost + countBalance;
 }
 function recentLocationTier(name, dateStr) {
+  if(getCatchUpUrgency(name,dateStr)>=0.5) return -1;
   const last=lastLocationDate(name,dateStr);
   if(last===dateStr) return 2;
   if(last && Date.parse(dateStr+'T00:00:00Z')-Date.parse(last+'T00:00:00Z')===86400000) return 1;
@@ -407,8 +434,8 @@ function renderManualSelectors() {
   const lEl = document.getElementById('manualLocation');
   const lpEl = document.getElementById('manualLoadPerson');
   if (!pEl) return;
-  const locAvail = state.people.filter(p => canGoToLocation(p.name, date));
-  const loadAvail = state.people.filter(p => canGoToLoading(p.name, date));
+  const locAvail = state.people.filter(p => canAssignManually(p.name, date));
+  const loadAvail = state.people.filter(p => canAssignManually(p.name, date));
   pEl.innerHTML = locAvail.map(p => `<option value="${p.name}">${p.id}. ${p.name}</option>`).join('');
   lpEl.innerHTML = loadAvail.map(p => `<option value="${p.name}">${p.id}. ${p.name}</option>`).join('');
   lEl.innerHTML = LOCATIONS.map(l => `<option value="${l.name}">${l.name}</option>`).join('');
@@ -522,10 +549,10 @@ function distribute() {
 
   const unavailable = [];
   for (const m of state.manualLoc) {
-    if (!canGoToLocation(m.name, date)) unavailable.push(`${m.name} — ${m.location} (недоступен для локаций)`);
+    if (!canAssignManually(m.name, date)) unavailable.push(`${m.name} — ${m.location} (отпуск или отсутствует весь день)`);
   }
   for (const name of state.manualLoad) {
-    if (!canGoToLoading(name, date)) unavailable.push(`${name} — отгрузка (недоступен для отгрузки)`);
+    if (!canAssignManually(name, date)) unavailable.push(`${name} — отгрузка (отпуск или отсутствует весь день)`);
   }
   if (unavailable.length) {
     const el = document.getElementById('planResult');
@@ -561,7 +588,10 @@ function distribute() {
 
   for (const req of requests) {
     const locName = req.location.name;
-    const candidates = state.people.filter(p => canGoToLocation(p.name, date));
+    const manualHere = manualLocData.filter(m=>m.location===locName);
+    const manualNames = new Set(manualHere.map(m=>m.name));
+    const remaining = Math.max(0,req.need-manualHere.length);
+    const candidates = state.people.filter(p => !manualNames.has(p.name) && canGoToLocation(p.name, date));
     candidates.sort((a, b) => {
       // Spread one click over the whole crew first, then reuse people for another location.
       const usedA=usedLoc.has(a.name)?1:0, usedB=usedLoc.has(b.name)?1:0;
@@ -574,8 +604,8 @@ function distribute() {
       if (la !== lb) return la - lb;
       return a.id - b.id;
     });
-    const selected = candidates.slice(0, req.need);
-    if (selected.length < req.need) shortages.push(`${locName}: не хватает ${req.need - selected.length}`);
+    const selected = candidates.slice(0, remaining);
+    if (selected.length < remaining) shortages.push(`${locName}: не хватает ${remaining - selected.length}`);
     selected.forEach(p => {
       usedLoc.add(p.name);
     });
@@ -630,7 +660,7 @@ function distribute() {
     }
   }
   for (const name of Object.keys(state.catchUp)) {
-    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
+    if ((state.counts[name] || 0) >= getPeerAverageTrips(name)) delete state.catchUp[name];
   }
   if (loadingWho.length) {
     state.loadingJournal.unshift({
@@ -674,6 +704,11 @@ function distribute() {
     html += '</ul>';
   }
   if (shortages.length) html += `<div class="shortage">⚠️ ${shortages.join('; ')}</div>`;
+  for (const [name,plan] of Object.entries(state.catchUp)) {
+    const gap=getPeerAverageTrips(name)-(state.counts[name]||0);
+    if (plan.deadline && date>=plan.deadline && gap>0.5)
+      html += `<div class="shortage">⚠️ ${name}: за 30 дней осталось отставание ${gap.toFixed(1)} поездки. Для полного выравнивания не хватило подходящих выездов.</div>`;
+  }
   if (absentInfo.length) html += `<div style="margin-top:10px;font-size:13px;color:#666;">Отсутствуют: ${absentInfo.join(', ')}</div>`;
   showResult(html, false);
 
@@ -834,7 +869,7 @@ function openPersonCard(name) {
   el.innerHTML = `
     <div class="card">
       <h2>👤 ${num}. ${name}</h2>
-      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">Умеренный приоритет</span></div>` : ''}
+      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">${cu.deadline ? 'До '+formatDate(cu.deadline) : '30 дней'}</span></div>` : ''}
       <div class="card-row"><span class="lbl">Рабочих дней за 30 дн.</span><span class="val">${workDays}</span></div>
     </div>
     <div class="card">

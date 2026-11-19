@@ -10,3 +10,8 @@ test('unavailable manual person stops distribution and preserves pending assignm
  const result=run('(state.manualLoad=["Репин"],state.dayOffs={"2026-11-18":{full:["Репин"]}},document.getElementById("loadingCount").value="3",distribute(),{pending:state.manualLoad,journal:state.loadingJournal,result:document.getElementById("planResult").textContent})');
  assert.deepEqual(result.pending,['Репин']);assert.deepEqual(result.journal,[]);assert.match(result.result,/Репин/);
 });
+test('manual loading overrides a no-loading preference but not a full-day absence',()=>{
+ const run=setup();
+ const result=run('(state.dayOffs={"2026-11-18":{noLoad:["Печерских"]}},state.manualLoad=["Печерских"],document.getElementById("loadingCount").value="3",distribute(),state.loadingJournal[0].who)');
+ assert.equal(result.length,3);assert.ok(result.includes('Печерских'));
+});

@@ -32,6 +32,7 @@
 
   <div class="card">
     <h2>👤 Вручную на локацию</h2>
+    <p class="info">Ручное назначение действует даже при отметке «без локаций». Отпуск и отсутствие весь день не переопределяются.</p>
     <select id="manualPerson"></select>
     <select id="manualLocation"></select>
     <button class="secondary" onclick="addManualLocation()">➕ Добавить</button>
@@ -40,6 +41,7 @@
 
   <div class="card">
     <h2 class="orange">👤 Вручную на отгрузку</h2>
+    <p class="info">Ручное назначение действует даже при отметке «без отгрузки».</p>
     <select id="manualLoadPerson"></select>
     <button class="secondary" onclick="addManualLoading()">➕ Добавить</button>
     <div id="manualLoadList"></div>
