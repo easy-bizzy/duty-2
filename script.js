@@ -300,14 +300,14 @@ function getCatchUpUrgency(name,dateStr) {
     plan.deadline=dateOffset(dateStr,CATCHUP_DAYS-1);
     plan.initialGap=Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0));
   }
-  if(dateStr>plan.deadline) return 0;
+  if(dateStr<plan.start || dateStr>plan.deadline) return 0;
   const elapsed=Math.max(0,Math.min(CATCHUP_DAYS-1,Math.round((Date.parse(dateStr+'T00:00:00Z')-Date.parse(plan.start+'T00:00:00Z'))/86400000)));
   const remainingTarget=plan.initialGap*Math.max(0,1-(elapsed+1)/CATCHUP_DAYS);
   return Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0)-remainingTarget);
 }
 function getCatchUpRateAllowance(name,dateStr) {
   const plan=state.catchUp[name];
-  if(!plan || !plan.start || dateStr>plan.deadline) return false;
+  if(!plan || !plan.start || dateStr<plan.start || dateStr>plan.deadline) return false;
   const trips=person=>state.journal.reduce((sum,j)=>sum+(j.date>=plan.start && j.date<=dateStr && j.who.includes(person)?1:0),0);
   const peers=state.people.filter(p=>p.name!==name);
   const peerRate=peers.reduce((sum,p)=>sum+trips(p.name),0)/Math.max(1,peers.length);
@@ -1005,13 +1005,25 @@ function addVacation(name, selectEl) {
   saveState(); renderPeople();
   logAction('vacation', { name, action: 'add', from: today, to: weekLater, type });
 }
+function invalidateVacationPlan(name, vacation) {
+  if (!vacation.to) return;
+  const start = dateOffset(vacation.to, 1);
+  if (state.processedVacationReturns?.[name] === start || state.catchUp[name]?.start === start) {
+    if (state.processedVacationReturns) delete state.processedVacationReturns[name];
+    delete state.catchUp[name];
+  }
+}
 function updateVac(name, idx, field, value) {
   if (!state.vacations[name] || !state.vacations[name][idx]) return;
-  state.vacations[name][idx][field] = value; saveState();
+  const vacation = state.vacations[name][idx];
+  if ((field === "from" || field === "to") && vacation[field] !== value) invalidateVacationPlan(name, vacation);
+  vacation[field] = value; saveState();
 }
 function removeVac(name, idx) {
   if (!state.vacations[name]) return;
   const v = state.vacations[name][idx];
+  if (!v) return;
+  invalidateVacationPlan(name, v);
   state.vacations[name].splice(idx, 1); saveState(); renderPeople();
   logAction('vacation', { name, action: 'remove', from: v.from, to: v.to, type: v.type });
 }

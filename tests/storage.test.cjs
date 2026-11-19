@@ -14,11 +14,11 @@ test('legacy startup preserves journals, settings, counters and exact original b
  const t=setup(original);vm.runInContext(app,t.context);t.run('saveState()');
  const next=JSON.parse(t.data.get('dutyApp')),old=JSON.parse(original);
  for(const key of ['journal','loadingJournal','counts','loadCounts','pin','vacations','custom']) assert.deepEqual(next[key],old[key]);
- assert.equal(t.data.get('dutyApp:backup:before-21-ORACLE'),original);
+ assert.equal(t.data.get('dutyApp:backup:before-22-ORACLE'),original);
  t.run("DutyStorage.backup('before-update')");const snapshot=t.data.get('dutyApp');
  const again=setup(snapshot);vm.runInContext(app,again.context);again.run('saveState()');assert.equal(again.data.get('dutyApp'),snapshot);
 });
-test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-21-ORACLE'),'{broken');});
+test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-22-ORACLE'),'{broken');});
 test('restoring a copy preserves current bytes and leaves source copy intact',()=>{
  const t=setup(original);t.run('DutyStorage.read()');t.run("DutyStorage.backup('before-update')");
  const source=t.run('DutyStorage.copies().find(k=>k.includes("before-update"))');
@@ -38,4 +38,19 @@ test('bounded backup retention preserves live data, recent copies and foreign ke
  t.data.set('other-app','keep');t.run('DutyStorage.read()');
  assert.equal(t.data.get('dutyApp'),original);assert.equal(t.data.get('other-app'),'keep');assert.equal(t.data.get('dutyApp:backup:before-20-ORACLE'),original);
  assert.ok(t.run('DutyStorage.copies().length')<=11);
+});
+test('corrupt startup preserves the only valid old recovery copy',()=>{
+ const t=setup('{broken');t.data.set('dutyApp:backup:before-18-ORACLE',original);
+ for(const n of [19,20,21]) t.data.set('dutyApp:backup:before-'+n+'-ORACLE','{broken');
+ const before=new Map(t.data);assert.throws(()=>t.run('DutyStorage.read()'));
+ for(const [key,value] of before) assert.equal(t.data.get(key),value);
+});
+test('failed backup write never prunes recovery copies',()=>{
+ const t=setup(original);for(let n=1;n<=20;n++) t.data.set('dutyApp:backup:before-'+n+'-ORACLE',original);
+ const before=new Map(t.data);t.deny();assert.throws(()=>t.run('DutyStorage.read()'));assert.deepEqual(t.data,before);
+});
+test('successful pruning retains the latest valid older version among corrupt newer copies',()=>{
+ const t=setup(original);t.data.set('dutyApp:backup:before-18-ORACLE',original);
+ for(const n of [19,20,21]) t.data.set('dutyApp:backup:before-'+n+'-ORACLE','{broken');
+ t.run('DutyStorage.read()');assert.equal(t.data.get('dutyApp:backup:before-18-ORACLE'),original);
 });

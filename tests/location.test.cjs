@@ -80,3 +80,17 @@ test('late distribution detects a return and replaces an expired earlier plan',(
 });
 test('one-day vacation registers on the next calendar day',()=>{const run=setup();assert.equal(run('(state.counts.Торопов=10,state.vacations.Репин=[{from:"2026-11-18",to:"2026-11-18"}],checkVacationReturn("Репин","2026-11-19"),state.catchUp.Репин.start)'),'2026-11-19');});
 test('old vacation does not start a new thirty-day period',()=>{const run=setup();assert.deepEqual(run('(state.counts.Торопов=10,state.vacations.Репин=[{from:"2026-09-01",to:"2026-09-18"}],checkVacationReturn("Репин","2026-11-19"),state.catchUp)'),{});});
+test('catch-up grants no priority outside its calendar period',()=>{
+ const run=setup();const result=run('(state.counts.Торопов=50,state.catchUp.Репин={start:"2026-11-19",deadline:"2026-12-18",initialGap:10},["2026-10-20","2026-12-19"].map(date=>({allow:getCatchUpRateAllowance("Репин",date),urgency:getCatchUpUrgency("Репин",date)})))');
+ assert.deepEqual(result,[{allow:false,urgency:0},{allow:false,urgency:0}]);
+});
+test('editing vacation end recalculates the plan in both directions',()=>{
+ const run=setup();run('(state.counts.Торопов=50,state.vacations.Репин=[{from:"2026-11-01",to:"2026-11-18"}],checkVacationReturn("Репин","2026-11-19"),true)');
+ const earlier=run('(updateVac("Репин",0,"to","2026-11-15"),checkVacationReturn("Репин","2026-11-16"),state.catchUp.Репин)');
+ assert.equal(earlier.start,'2026-11-16');assert.equal(earlier.deadline,'2026-12-15');
+ const later=run('(updateVac("Репин",0,"to","2026-11-25"),checkVacationReturn("Репин","2026-11-19"),state.catchUp)');assert.deepEqual(later,{});
+ assert.equal(run('(checkVacationReturn("Репин","2026-11-26"),state.catchUp.Репин.start)'),'2026-11-26');
+});
+test('editing an unrelated future vacation leaves the current plan intact',()=>{
+ const run=setup();assert.equal(run('(state.counts.Торопов=50,state.vacations.Репин=[{from:"2026-11-01",to:"2026-11-18"},{from:"2027-01-01",to:"2027-01-10"}],checkVacationReturn("Репин","2026-11-19"),updateVac("Репин",1,"to","2027-01-12"),state.catchUp.Репин.start)'),'2026-11-19');
+});

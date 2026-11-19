@@ -1,6 +1,6 @@
 /* Keep original dutyApp data; never recover by silently creating an empty state. */
 const DutyStorage = (() => {
-  const KEY='dutyApp', VERSION='21-ORACLE';
+  const KEY='dutyApp', VERSION='22-ORACLE';
   let expected, blocked=false, restoring=false;
   function validate(data) {
     if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
@@ -9,6 +9,9 @@ const DutyStorage = (() => {
     for(const key of ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday','rotation','processedVacationReturns']) if(data[key]!==undefined && (!data[key] || typeof data[key]!=='object' || Array.isArray(data[key]))) throw Error('Повреждены настройки '+key);
     for(const key of ['manualLoc','manualLoad','actionLog']) if(data[key]!==undefined && !Array.isArray(data[key])) throw Error('Повреждены настройки '+key);
     return data;
+  }
+  function isValidCopy(raw) {
+    try { validate(JSON.parse(raw)); return true; } catch (_) { return false; }
   }
   function pruneBackups(protectedKey, extraProtectedKey) {
     const prefix=KEY+':backup:';
@@ -24,15 +27,19 @@ const DutyStorage = (() => {
     }
     for(const [group,keep] of [[groups.versions,2],[groups.dated,8]]) {
       group.sort((a,b)=>b.order-a.order);
-      for(const item of group.slice(keep)) localStorage.removeItem(item.key);
+      const newestValid=group.find(item=>isValidCopy(localStorage.getItem(item.key)));
+      for(const item of group.slice(keep)) {
+        if(item!==newestValid) localStorage.removeItem(item.key);
+      }
     }
   }
   function rawBackup(raw,name,extraProtectedKey) {
     if(raw===null) return;
     const key=KEY+':backup:'+name;
-    pruneBackups(key,extraProtectedKey);
     localStorage.setItem(key,raw);
     if(localStorage.getItem(key)!==raw) throw Error('Не удалось проверить резервную копию');
+    // Never remove recovery options before a successful, valid backup exists.
+    if(isValidCopy(raw)) pruneBackups(key,extraProtectedKey);
   }
   function read() {
     expected=localStorage.getItem(KEY);
