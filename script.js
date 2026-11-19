@@ -6,11 +6,8 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-const CATCHUP_RATE = 1.5; 
-const CATCHUP_MIN_COEF = 0.4; 
-// Штраф за недавний выезд уменьшен до 150, чтобы люди не застревали внизу
-const FRESH_PENALTY = 150; 
-const DEVIATION_SCALE = 100;
+// At most one and a half days of extra queue age; yesterday still comes last.
+const VACATION_QUEUE_BOOST_DAYS = 1.5;
 const DEFAULT_PIN = '1234';
 const PIN_SESSION_MIN = 5;
 const ACTION_LOG_LIMIT = 500;
@@ -274,21 +271,12 @@ function applyDailyCatchUp() {
   if (state.lastCatchUpUpdate === today) return;
   state.lastCatchUpUpdate = today;
   for (const name in state.catchUp) {
-    const c = state.catchUp[name];
-    c.coef = Math.min(1.0, c.coef + c.step);
-    c.daysLeft -= 1;
-    if (c.daysLeft <= 0 || c.coef >= 1.0) delete state.catchUp[name];
+    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
   }
   saveState();
 }
 function registerVacationEnd(name, daysAbsent) {
-  const catchUpDays = Math.max(1, Math.round(daysAbsent * CATCHUP_RATE));
-  const step = (1.0 - CATCHUP_MIN_COEF) / catchUpDays;
-  state.catchUp[name] = { coef: CATCHUP_MIN_COEF, daysLeft: catchUpDays, step, daysAbsent };
-}
-function getCatchUpCoef(name) {
-  const c = state.catchUp[name];
-  return c ? c.coef : 1.0;
+  if ((state.counts[name] || 0) < getAverageLocationTrips()) state.catchUp[name] = { daysAbsent };
 }
 
 // ============= РАБОЧИЕ ДНИ =============
@@ -318,16 +306,12 @@ function getDeviationLocation(name) {
 }
 
 // ============= СВЕЖЕСТЬ =============
-function wasOnLocationPrevDay(name, dateStr) {
-  const pastRecords = state.journal
-    .filter(j => j.date < dateStr && j.who.includes(name))
-    .sort((a, b) => b.date.localeCompare(a.date));
-  if (pastRecords.length === 0) return false;
-  const lastDate = pastRecords[0].date;
-  const d1 = new Date(lastDate + 'T00:00:00');
-  const d2 = new Date(dateStr + 'T00:00:00');
-  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-  return diffDays <= 2; // Штраф даем, только если ездил 1 или 2 дня назад
+function lastLocationDate(name, dateStr) {
+  let latest = '';
+  for (const j of state.journal) {
+    if (j.date <= dateStr && j.date > latest && j.who.includes(name)) latest = j.date;
+  }
+  return latest;
 }
 
 // ============= ВЫХОД ИЗ ОТПУСКА =============
@@ -356,11 +340,19 @@ function getLocationLocPoints(name, locName) {
 
 // ============= СОРТИРОВКА ЛОКАЦИЙ =============
 function getLocationSortScore(name, dateStr) {
-  const dev = getDeviationLocation(name);
-  const fresh = wasOnLocationPrevDay(name, dateStr) ? FRESH_PENALTY : 0;
-  // Бонус догоняния теперь -300. Он помогает, но не ломает очередь
-  const catchUpBonus = state.catchUp[name] ? -300 : 0; 
-  return dev * DEVIATION_SCALE + fresh + catchUpBonus;
+  const last = lastLocationDate(name, dateStr);
+  const age = last ? Math.max(0, (Date.parse(dateStr+'T00:00:00Z') - Date.parse(last+'T00:00:00Z')) / 86400000) : 365;
+  const behind = (state.counts[name] || 0) < getAverageLocationTrips();
+  const vacationBoost = state.catchUp[name] && behind ? VACATION_QUEUE_BOOST_DAYS : 0;
+  // A small count tie-breaker also helps ordinary workers with fewer trips.
+  const countBalance = Math.max(-1, Math.min(1, getDeviationLocation(name))) * 0.15;
+  return -age - vacationBoost + countBalance;
+}
+function recentLocationTier(name, dateStr) {
+  const last=lastLocationDate(name,dateStr);
+  if(last===dateStr) return 2;
+  if(last && Date.parse(dateStr+'T00:00:00Z')-Date.parse(last+'T00:00:00Z')===86400000) return 1;
+  return 0;
 }
 
 // ============= ОТГРУЗКА: РОТАЦИЯ ПО ТРОЙКАМ =============
@@ -569,8 +561,13 @@ function distribute() {
 
   for (const req of requests) {
     const locName = req.location.name;
-    const candidates = state.people.filter(p => !usedLoc.has(p.name) && canGoToLocation(p.name, date));
+    const candidates = state.people.filter(p => canGoToLocation(p.name, date));
     candidates.sort((a, b) => {
+      // Spread one click over the whole crew first, then reuse people for another location.
+      const usedA=usedLoc.has(a.name)?1:0, usedB=usedLoc.has(b.name)?1:0;
+      if(usedA!==usedB) return usedA-usedB;
+      const tierA=recentLocationTier(a.name,date), tierB=recentLocationTier(b.name,date);
+      if(tierA!==tierB) return tierA-tierB;
       const sa = getLocationSortScore(a.name, date), sb = getLocationSortScore(b.name, date);
       if (sa !== sb) return sa - sb;
       const la = getLocationLocPoints(a.name, locName), lb = getLocationLocPoints(b.name, locName);
@@ -631,6 +628,9 @@ function distribute() {
       if (!state.locCounts[w.name]) state.locCounts[w.name] = {};
       state.locCounts[w.name][a.location.name] = (state.locCounts[w.name][a.location.name] || 0) + 1;
     }
+  }
+  for (const name of Object.keys(state.catchUp)) {
+    if ((state.counts[name] || 0) >= getAverageLocationTrips()) delete state.catchUp[name];
   }
   if (loadingWho.length) {
     state.loadingJournal.unshift({
@@ -834,7 +834,7 @@ function openPersonCard(name) {
   el.innerHTML = `
     <div class="card">
       <h2>👤 ${num}. ${name}</h2>
-      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">${Math.round(cu.coef*100)}%</span></div>` : ''}
+      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">Умеренный приоритет</span></div>` : ''}
       <div class="card-row"><span class="lbl">Рабочих дней за 30 дн.</span><span class="val">${workDays}</span></div>
     </div>
     <div class="card">
