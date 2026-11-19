@@ -14,11 +14,11 @@ test('legacy startup preserves journals, settings, counters and exact original b
  const t=setup(original);vm.runInContext(app,t.context);t.run('saveState()');
  const next=JSON.parse(t.data.get('dutyApp')),old=JSON.parse(original);
  for(const key of ['journal','loadingJournal','counts','loadCounts','pin','vacations','custom']) assert.deepEqual(next[key],old[key]);
- assert.equal(t.data.get('dutyApp:backup:before-20-ORACLE'),original);
+ assert.equal(t.data.get('dutyApp:backup:before-21-ORACLE'),original);
  t.run("DutyStorage.backup('before-update')");const snapshot=t.data.get('dutyApp');
  const again=setup(snapshot);vm.runInContext(app,again.context);again.run('saveState()');assert.equal(again.data.get('dutyApp'),snapshot);
 });
-test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-20-ORACLE'),'{broken');});
+test('corrupt JSON is retained, never overwritten by fresh state',()=>{const t=setup('{broken');assert.throws(()=>vm.runInContext(app,t.context));assert.equal(t.data.get('dutyApp'),'{broken');assert.equal(t.data.get('dutyApp:backup:before-21-ORACLE'),'{broken');});
 test('restoring a copy preserves current bytes and leaves source copy intact',()=>{
  const t=setup(original);t.run('DutyStorage.read()');t.run("DutyStorage.backup('before-update')");
  const source=t.run('DutyStorage.copies().find(k=>k.includes("before-update"))');
@@ -33,3 +33,9 @@ test('restoring a copy preserves current bytes and leaves source copy intact',()
 test('quota error blocks change without losing current data',()=>{const t=setup(original);t.run('DutyStorage.read()');t.deny();assert.throws(()=>t.run("DutyStorage.write({...JSON.parse(DutyStorage.read()),pin:'9999'})"));assert.equal(t.data.get('dutyApp'),original);});
 test('stale tab cannot overwrite newer history',()=>{const t=setup(original);t.run('DutyStorage.read()');t.data.set('dutyApp',original+' ');assert.throws(()=>t.run('DutyStorage.write({people:[],journal:[]})'));assert.equal(t.data.get('dutyApp'),original+' ');});
 test('invalid import rejected before changing storage',()=>{const t=setup(original);t.run('DutyStorage.read()');assert.throws(()=>t.run('DutyStorage.validate({people:[],journal:{}})'));assert.equal(t.data.get('dutyApp'),original);});
+test('bounded backup retention preserves live data, recent copies and foreign keys',()=>{
+ const t=setup(original);for(let i=1;i<=20;i++) {t.data.set('dutyApp:backup:before-'+i+'-ORACLE',original);t.data.set('dutyApp:backup:before-update-'+(1000+i)+'-1',original);}
+ t.data.set('other-app','keep');t.run('DutyStorage.read()');
+ assert.equal(t.data.get('dutyApp'),original);assert.equal(t.data.get('other-app'),'keep');assert.equal(t.data.get('dutyApp:backup:before-20-ORACLE'),original);
+ assert.ok(t.run('DutyStorage.copies().length')<=11);
+});

@@ -1,18 +1,36 @@
 /* Keep original dutyApp data; never recover by silently creating an empty state. */
 const DutyStorage = (() => {
-  const KEY='dutyApp', VERSION='20-ORACLE';
+  const KEY='dutyApp', VERSION='21-ORACLE';
   let expected, blocked=false, restoring=false;
   function validate(data) {
     if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
     for(const key of ['journal','loadingJournal']) if(data[key]!==undefined && (!Array.isArray(data[key]) || data[key].some(j=>!j || typeof j.date!=='string' || !Array.isArray(j.who)))) throw Error('Повреждён журнал '+key);
     if(data.people.some(p=>!p || typeof p.name!=='string')) throw Error('Повреждён список сотрудников');
-    for(const key of ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday','rotation']) if(data[key]!==undefined && (!data[key] || typeof data[key]!=='object' || Array.isArray(data[key]))) throw Error('Повреждены настройки '+key);
+    for(const key of ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday','rotation','processedVacationReturns']) if(data[key]!==undefined && (!data[key] || typeof data[key]!=='object' || Array.isArray(data[key]))) throw Error('Повреждены настройки '+key);
     for(const key of ['manualLoc','manualLoad','actionLog']) if(data[key]!==undefined && !Array.isArray(data[key])) throw Error('Повреждены настройки '+key);
     return data;
   }
-  function rawBackup(raw,name) {
+  function pruneBackups(protectedKey, extraProtectedKey) {
+    const prefix=KEY+':backup:';
+    const groups={versions:[],dated:[]};
+    for(let i=0;i<localStorage.length;i++) {
+      const key=localStorage.key(i);
+      if(!key || !key.startsWith(prefix) || (key===protectedKey || key===extraProtectedKey)) continue;
+      const suffix=key.slice(prefix.length);
+      const version=/^before-(\d+)-ORACLE$/.exec(suffix);
+      const dated=/^before-(?:update|import|reset|restore)-(\d+)(?:-\d+)?$/.exec(suffix);
+      if(version) groups.versions.push({key,order:Number(version[1])});
+      else if(dated) groups.dated.push({key,order:Number(dated[1])});
+    }
+    for(const [group,keep] of [[groups.versions,2],[groups.dated,8]]) {
+      group.sort((a,b)=>b.order-a.order);
+      for(const item of group.slice(keep)) localStorage.removeItem(item.key);
+    }
+  }
+  function rawBackup(raw,name,extraProtectedKey) {
     if(raw===null) return;
     const key=KEY+':backup:'+name;
+    pruneBackups(key,extraProtectedKey);
     localStorage.setItem(key,raw);
     if(localStorage.getItem(key)!==raw) throw Error('Не удалось проверить резервную копию');
   }
@@ -58,7 +76,7 @@ const DutyStorage = (() => {
     validate(JSON.parse(raw));
     const current=localStorage.getItem(KEY);
     // Keep the exact current bytes before replacing them, including a damaged state.
-    if(current!==null) rawBackup(current,'before-restore-'+Date.now());
+    if(current!==null) rawBackup(current,'before-restore-'+Date.now(),key);
     localStorage.setItem(KEY,raw);
     if(localStorage.getItem(KEY)!==raw) throw Error('Не удалось проверить восстановление');
     expected=raw; blocked=false; restoring=true;

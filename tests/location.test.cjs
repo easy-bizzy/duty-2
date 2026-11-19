@@ -73,3 +73,10 @@ test('specific location counts do not break global queue ties, and saved total c
  const name=next('(state.counts.Торопов=10,document.getElementById("loc1").value="1",distribute(),state.journal[0].who[0])');
  assert.equal(name,'Печерских');
 });
+test('late distribution detects a return and replaces an expired earlier plan',()=>{
+ const run=setup();const plan=run('(state.people.forEach(p=>state.counts[p.name]=10),state.counts.Репин=0,state.vacations.Репин=[{from:"2026-11-18",to:"2026-11-18"}],state.catchUp.Репин={start:"2026-09-01",deadline:"2026-09-30",initialGap:5},checkVacationReturn("Репин","2026-11-22"),state.catchUp.Репин)');
+ assert.equal(plan.start,'2026-11-19');assert.equal(plan.deadline,'2026-12-18');assert.equal(plan.daysAbsent,1);
+ const again=run('(delete state.catchUp.Репин,checkVacationReturn("Репин","2026-11-23"),state.catchUp)');assert.deepEqual(again,{});
+});
+test('one-day vacation registers on the next calendar day',()=>{const run=setup();assert.equal(run('(state.counts.Торопов=10,state.vacations.Репин=[{from:"2026-11-18",to:"2026-11-18"}],checkVacationReturn("Репин","2026-11-19"),state.catchUp.Репин.start)'),'2026-11-19');});
+test('old vacation does not start a new thirty-day period',()=>{const run=setup();assert.deepEqual(run('(state.counts.Торопов=10,state.vacations.Репин=[{from:"2026-09-01",to:"2026-09-18"}],checkVacationReturn("Репин","2026-11-19"),state.catchUp)'),{});});

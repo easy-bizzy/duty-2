@@ -355,21 +355,24 @@ function lastLocationDate(name, dateStr) {
 
 // ============= ВЫХОД ИЗ ОТПУСКА =============
 function checkVacationReturn(name, dateStr) {
-  const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - 1);
-  const yesterday = d.toISOString().slice(0, 10);
-  const wasOnVac = isOnVacation(name, yesterday);
-  const isFree = !isOnVacation(name, dateStr);
-  if (wasOnVac && isFree && !state.catchUp[name]) {
-    const vacs = state.vacations[name] || [];
-    const vac = vacs.find(v => yesterday >= v.from && yesterday <= v.to);
-    if (vac) {
-      const from = new Date(vac.from + 'T00:00:00');
-      const to = new Date(vac.to + 'T00:00:00');
-      const days = Math.round((to - from) / 86400000) + 1;
-      registerVacationEnd(name, days, dateStr);
-      saveState();
-    }
+  if (isOnVacation(name, dateStr)) return;
+  const vacations = (state.vacations[name] || []).filter(v => v.to < dateStr && v.from <= v.to);
+  vacations.sort((a,b) => b.to.localeCompare(a.to));
+  const vacation = vacations[0];
+  if (!vacation) return;
+  const start = dateOffset(vacation.to, 1);
+  if (!state.processedVacationReturns) state.processedVacationReturns = {};
+  if ((state.processedVacationReturns[name] || '') >= start) return;
+  state.processedVacationReturns[name] = start;
+  const existing = state.catchUp[name];
+  // Preserve an already active plan for this return, including legacy plans.
+  if (existing && existing.start >= start) { saveState(); return; }
+  delete state.catchUp[name];
+  if (dateStr <= dateOffset(start, CATCHUP_DAYS - 1)) {
+    const days = Math.round((Date.parse(vacation.to+'T00:00:00Z') - Date.parse(vacation.from+'T00:00:00Z')) / 86400000) + 1;
+    registerVacationEnd(name, days, start);
   }
+  saveState();
 }
 
 // ============= БАЛЛЫ ПО ЛОКАЦИИ =============
