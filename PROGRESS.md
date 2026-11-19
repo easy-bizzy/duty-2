@@ -1,6 +1,6 @@
 # ORACLE — release notes, 2026-11-19
 
-Repository: easy-bizzy/duty-2. PR #1 merged into main on 2026-11-19; GitHub Pages deployment succeeded. The current work prepares version 18-ORACLE.
+Repository: easy-bizzy/duty-2. PR #1 merged into main on 2026-11-19; GitHub Pages deployment succeeded. The current work prepares version 19-ORACLE.
 
 ## User requirements
 - 6 workers. Same person may do loading and location on same day; multiple location trips per day are legitimate. Manual trips override automatic order and remain in history.
@@ -35,3 +35,5 @@ Read this file and UPDATE-NOTES.md, inspect draft branch diff. Run `node --test 
 2026-11-19 post-publication: Main merged at 2fc4a7f; Pages build succeeded and live ORACLE 16 was observed after closing the legacy tab. Found and fixed restoration overwrite on beforeunload; version/cache bumped to 17. A real phone's history remains untested because no phone data or session is available. The user must export JSON on each phone, then verify history/settings and offline startup after updating.
 
 2026-11-19 next release: Version 18 introduces a 30-calendar-day vacation catch-up plan. Priority becomes urgent only when actual trips lag behind a linear target; daily trips are allowed then. Under synthetic 10-day vacation + 3 trips/day, after 30 days all six have 20 trips, with occasional consecutive days. Under 5 trips/day to one location, catch-up cannot complete because the returnee already goes every day; UI displays remaining deficit. Manual assignments override soft no-location/no-loading preferences but still stop on actual vacation/full-day absence. Manual location assignments now count toward requested places, like manual loading assignments. 24 Node tests pass. Preserve dutyApp and update via waiting service worker; real phone data still not accessible here.
+
+2026-11-19 correction from field use: Version 18 promoted an overdue returnee ahead of peers, causing consecutive trips. Version 19 moves an overdue returnee only into the lower half of the unused queue and limits extra priority to 1.5 times the peer trip rate after return. The 30-day target can therefore be impossible under fixed three-of-six daily demand; UI reports remaining gap. Removed location-specific counts from sorting; only global queue controls assignment, while location counts remain in statistics. Saved per-person reasons now appear with each new journal entry and at distribution time. Existing journal entries remain unchanged and have no reconstructed reasons. The app reads persisted dutyApp counts/journals, but no actual phone export was provided to diagnose Surnin/Repin counts. 26 Node tests pass before publishing.

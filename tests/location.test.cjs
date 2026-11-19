@@ -34,13 +34,12 @@ test('repeated same-day clicks and loading keep separate journal records',()=>{
  assert.equal(result.loc.length,2);assert.equal(result.loads.length,1);
  assert.equal(result.loc[0].who.length,2);assert.equal(result.loc[1].who.length,2);
 });
-test('thirty days of three daily slots close a ten-day vacation deficit with occasional consecutive trips',()=>{
+test('three daily slots keep the returnee out of consecutive days and report unattainable 30-day equality',()=>{
  const run=setup();
- const result=run('(()=>{state.vacations.Печерских=[{from:"2026-01-01",to:"2026-01-10",type:"отпуск"}];for(let n=0;n<40;n++){document.getElementById("planDate").value=dateOffset("2026-01-01",n);document.getElementById("loc1").value="3";distribute()}return {counts:state.counts,catchUp:state.catchUp,trips:state.journal.filter(j=>j.who.includes("Печерских")).map(j=>j.date).sort()}})()');
- assert.equal(result.counts.Печерских,20);assert.ok(Object.values(result.counts).every(n=>n===20));
- assert.equal(result.catchUp.Печерских,undefined);
- assert.ok(result.trips.some((date,i)=>i>0 && Date.parse(date)-Date.parse(result.trips[i-1])===86400000));
- assert.ok(result.trips.length<30);
+ const result=run('(()=>{state.vacations.Печерских=[{from:"2026-01-01",to:"2026-01-10",type:"отпуск"}];for(let n=0;n<40;n++){document.getElementById("planDate").value=dateOffset("2026-01-01",n);document.getElementById("loc1").value="3";distribute()}return {counts:state.counts,trips:state.journal.filter(j=>j.who.includes("Печерских")).map(j=>j.date).sort(),message:document.getElementById("planResult").innerHTML}})()');
+ assert.ok(result.trips.every((date,i)=>i===0 || Date.parse(date)-Date.parse(result.trips[i-1])>=2*86400000));
+ assert.ok(result.counts.Печерских<result.counts.Торопов);
+ assert.match(result.message,/правиле очереди догнать коллег/);
 });
 test('manual location works despite a no-location preference',()=>{
  const run=setup();
@@ -56,5 +55,21 @@ test('one mandatory manual location worker fills one of three requested places',
 test('impossible thirty-day catch-up is shown instead of silently claiming equality',()=>{
  const run=setup();
  const result=run('(()=>{state.vacations.Печерских=[{from:"2026-01-01",to:"2026-01-10",type:"отпуск"}];for(let n=0;n<40;n++){document.getElementById("planDate").value=dateOffset("2026-01-01",n);document.getElementById("loc1").value="5";distribute()}return {gap:getPeerAverageTrips("Печерских")-state.counts.Печерских,message:document.getElementById("planResult").innerHTML}})()');
- assert.ok(result.gap>0);assert.match(result.message,/не хватило подходящих выездов/);
+ assert.ok(result.gap>0);assert.match(result.message,/правиле очереди догнать коллег/);
+});
+test('catch-up extra priority is capped at 150 percent of peer trip rate',()=>{
+ const run=setup();
+ const result=run('(()=>{state.catchUp.Репин={start:"2026-11-01",deadline:"2026-11-30",initialGap:6};state.journal=[{date:"2026-11-01",who:["Репин","Торопов","Печерских","Осинкин","Сабуров","Сурнин"]},{date:"2026-11-03",who:["Репин","Торопов","Печерских","Осинкин","Сабуров","Сурнин"]},{date:"2026-11-05",who:["Репин"]}];return {allowThird:getCatchUpRateAllowance("Репин","2026-11-06"),urgency:getCatchUpUrgency("Репин","2026-11-06")}})()');
+ assert.equal(result.allowThird,true);
+ const blocked=run('(state.journal.unshift({date:"2026-11-06",who:["Репин"]}),getCatchUpRateAllowance("Репин","2026-11-07"))');
+ assert.equal(blocked,false);
+});
+test('specific location counts do not break global queue ties, and saved total counts do',()=>{
+ const run=setup();
+ const result=run('(state.people.forEach(p=>state.counts[p.name]=2),state.locCounts.Торопов={Автозавод:100},document.getElementById("loc1").value="1",distribute(),{who:state.journal[0].who,reasons:state.journal[0].reasons})');
+ assert.deepEqual(result.who,['Торопов']);assert.match(result.reasons[0],/очередь 1\/6/);
+ assert.match(run('(renderJournal(),document.getElementById("journalList").innerHTML)'),/Почему этот состав/);
+ const next=setup();
+ const name=next('(state.counts.Торопов=10,document.getElementById("loc1").value="1",distribute(),state.journal[0].who[0])');
+ assert.equal(name,'Печерских');
 });

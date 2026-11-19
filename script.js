@@ -6,7 +6,7 @@ const LOCATIONS = [
 ];
 const DEFAULT_PEOPLE = ['Торопов', 'Печерских', 'Репин', 'Осинкин', 'Сабуров', 'Сурнин'];
 const WINDOW_DAYS = 30;
-// Normal vacation priority; an overdue 30-day catch-up may also travel yesterday/today.
+// Vacation priority is limited to 1.5 times the peers' trip rate after return.
 const VACATION_QUEUE_BOOST_DAYS = 1.5;
 const CATCHUP_DAYS = 30;
 const DEFAULT_PIN = '1234';
@@ -300,9 +300,22 @@ function getCatchUpUrgency(name,dateStr) {
     plan.deadline=dateOffset(dateStr,CATCHUP_DAYS-1);
     plan.initialGap=Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0));
   }
+  if(dateStr>plan.deadline) return 0;
   const elapsed=Math.max(0,Math.min(CATCHUP_DAYS-1,Math.round((Date.parse(dateStr+'T00:00:00Z')-Date.parse(plan.start+'T00:00:00Z'))/86400000)));
   const remainingTarget=plan.initialGap*Math.max(0,1-(elapsed+1)/CATCHUP_DAYS);
   return Math.max(0,getPeerAverageTrips(name)-(state.counts[name]||0)-remainingTarget);
+}
+function getCatchUpRateAllowance(name,dateStr) {
+  const plan=state.catchUp[name];
+  if(!plan || !plan.start || dateStr>plan.deadline) return false;
+  const trips=person=>state.journal.reduce((sum,j)=>sum+(j.date>=plan.start && j.date<=dateStr && j.who.includes(person)?1:0),0);
+  const peers=state.people.filter(p=>p.name!==name);
+  const peerRate=peers.reduce((sum,p)=>sum+trips(p.name),0)/Math.max(1,peers.length);
+  return trips(name)+1<=1+1.5*peerRate+1e-9;
+}
+function hasTwoConsecutivePriorDays(name,dateStr) {
+  return lastLocationDate(name,dateStr)===dateOffset(dateStr,-1) &&
+    state.journal.some(j=>j.date===dateOffset(dateStr,-2) && j.who.includes(name));
 }
 
 // ============= РАБОЧИЕ ДНИ =============
@@ -360,22 +373,18 @@ function checkVacationReturn(name, dateStr) {
 }
 
 // ============= БАЛЛЫ ПО ЛОКАЦИИ =============
-function getLocationLocPoints(name, locName) {
-  return (state.locCounts[name] && state.locCounts[name][locName]) || 0;
-}
-
 // ============= СОРТИРОВКА ЛОКАЦИЙ =============
 function getLocationSortScore(name, dateStr) {
+  if(state.catchUp[name]) getCatchUpUrgency(name,dateStr);
   const last = lastLocationDate(name, dateStr);
   const age = last ? Math.max(0, (Date.parse(dateStr+'T00:00:00Z') - Date.parse(last+'T00:00:00Z')) / 86400000) : 365;
   const behind = (state.counts[name] || 0) < getPeerAverageTrips(name);
-  const vacationBoost = state.catchUp[name] && behind ? VACATION_QUEUE_BOOST_DAYS : 0;
+  const vacationBoost = state.catchUp[name] && behind && getCatchUpRateAllowance(name,dateStr) ? VACATION_QUEUE_BOOST_DAYS : 0;
   // A small count tie-breaker also helps ordinary workers with fewer trips.
   const countBalance = Math.max(-1, Math.min(1, getDeviationLocation(name))) * 0.15;
   return -age - vacationBoost + countBalance;
 }
 function recentLocationTier(name, dateStr) {
-  if(getCatchUpUrgency(name,dateStr)>=0.5) return -1;
   const last=lastLocationDate(name,dateStr);
   if(last===dateStr) return 2;
   if(last && Date.parse(dateStr+'T00:00:00Z')-Date.parse(last+'T00:00:00Z')===86400000) return 1;
@@ -600,18 +609,35 @@ function distribute() {
       if(tierA!==tierB) return tierA-tierB;
       const sa = getLocationSortScore(a.name, date), sb = getLocationSortScore(b.name, date);
       if (sa !== sb) return sa - sb;
-      const la = getLocationLocPoints(a.name, locName), lb = getLocationLocPoints(b.name, locName);
-      if (la !== lb) return la - lb;
       return a.id - b.id;
     });
+    // An overdue returnee joins the lower half of the unused queue, never its front.
+    // No special promotion after two consecutive days or beyond +50% of peer rate.
+    const unusedCount=candidates.filter(p=>!usedLoc.has(p.name)).length;
+    const promoted=new Set();
+    for(const person of [...candidates]) {
+      const name=person.name;
+      if(usedLoc.has(name) || lastLocationDate(name,date)!==dateOffset(date,-1) ||
+         getCatchUpUrgency(name,date)<0.5 || !getCatchUpRateAllowance(name,date) ||
+         hasTwoConsecutivePriorDays(name,date)) continue;
+      const from=candidates.indexOf(person);
+      candidates.splice(from,1);
+      const middle=Math.max(1,Math.floor(unusedCount/2));
+      candidates.splice(Math.min(middle,candidates.length),0,person);
+      promoted.add(name);
+    }
     const selected = candidates.slice(0, remaining);
     if (selected.length < remaining) shortages.push(`${locName}: не хватает ${remaining - selected.length}`);
+    const previouslyUsed=new Set(usedLoc);
     selected.forEach(p => {
       usedLoc.add(p.name);
     });
     assignments.push({
       location: req.location,
-      who: selected.map(p => ({ name: p.name, num: p.id }))
+      who: selected.map(p => ({
+        name: p.name, num: p.id,
+        reason: `очередь ${candidates.indexOf(p)+1}/${candidates.length}; последний выезд ${lastLocationDate(p.name,date) ? formatDate(lastLocationDate(p.name,date)) : 'не записан'}; всего поездок ${state.counts[p.name]||0}${promoted.has(p.name) ? '; догоняет после отпуска, дополнительное место в середине очереди' : ''}${previouslyUsed.has(p.name) ? '; повторный выезд на другую локацию сегодня' : ''}`
+      }))
     });
   }
 
@@ -652,7 +678,7 @@ function distribute() {
   const note = absentInfo.length ? 'Отсутствовали: ' + absentInfo.join(', ') : '';
 
   for (const a of assignments) {
-    if (a.who.length) state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), note });
+    if (a.who.length) state.journal.unshift({ date, location: a.location.name, who: a.who.map(w => w.name), reasons: a.who.map(w=>w.reason), note });
     for (const w of a.who) {
       state.counts[w.name] = (state.counts[w.name] || 0) + 1;
       if (!state.locCounts[w.name]) state.locCounts[w.name] = {};
@@ -666,6 +692,7 @@ function distribute() {
     state.loadingJournal.unshift({
       date,
       who: loadingWho.map(w => w.name),
+      reasons: loadingWho.map(w=>manualLoadData.some(m=>m.name===w.name) ? 'ручное назначение' : LOADING_GROUPS[groupNum].includes(w.name) ? `очередь тройки ${groupNum}` : `замена отсутствующего участника тройки ${groupNum}`),
       note,
       group: groupNum
     });
@@ -691,9 +718,10 @@ function distribute() {
   }
   if (assignments.length) {
     html += '<div style="font-weight:600;color:#1a73e8;">✅ Локации:</div>';
+    html += '<div class="note">Локации заполняются в указанном порядке; число поездок на конкретную локацию не влияет на очередь.</div>';
     for (const a of assignments) {
       html += `<div class="loc-name">${a.location.name}:</div><ul>`;
-      for (const w of a.who) html += `<li><span class="num">${w.num}</span>${w.name}</li>`;
+      for (const w of a.who) html += `<li><span class="num">${w.num}</span>${w.name}<div class="reason">Почему: ${w.reason}</div></li>`;
       html += '</ul>';
     }
   }
@@ -707,7 +735,7 @@ function distribute() {
   for (const [name,plan] of Object.entries(state.catchUp)) {
     const gap=getPeerAverageTrips(name)-(state.counts[name]||0);
     if (plan.deadline && date>=plan.deadline && gap>0.5)
-      html += `<div class="shortage">⚠️ ${name}: за 30 дней осталось отставание ${gap.toFixed(1)} поездки. Для полного выравнивания не хватило подходящих выездов.</div>`;
+      html += `<div class="shortage">⚠️ ${name}: за 30 дней осталось отставание ${gap.toFixed(1)} поездки. При нынешнем числе выездов и правиле очереди догнать коллег за месяц не получилось.</div>`;
   }
   if (absentInfo.length) html += `<div style="margin-top:10px;font-size:13px;color:#666;">Отсутствуют: ${absentInfo.join(', ')}</div>`;
   showResult(html, false);
@@ -725,6 +753,9 @@ function showResult(html, isWarn) {
   el.className = 'result' + (isWarn ? ' warn' : '');
   el.innerHTML = html;
 }
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
 
 // ============= ЖУРНАЛ =============
 function renderJournal() {
@@ -735,7 +766,7 @@ function renderJournal() {
     for (const j of state.journal) { if (!byDate[j.date]) byDate[j.date] = []; byDate[j.date].push(j); }
     el.innerHTML = Object.keys(byDate).sort().reverse().map(date => {
       const items = byDate[date];
-      const rows = items.map(j => `<div class="who"><b>${j.location}:</b> ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}${j.manual ? ' <i>(ручное)</i>' : ''}</div>`).join('');
+      const rows = items.map(j => `<div class="who"><b>${escapeHtml(j.location)}:</b> ${j.who.map(n => getPersonNumber(n) + '. ' + escapeHtml(n)).join(', ')}${j.manual ? ' <i>(ручное)</i>' : ''}</div>${Array.isArray(j.reasons) ? `<details class="why"><summary>Почему этот состав?</summary><div>Локация задана потребностью; личный счётчик по ней не участвует в очереди.</div>${j.reasons.map((reason,i)=>`<div>${escapeHtml(j.who[i]||'')}: ${escapeHtml(reason)}</div>`).join('')}</details>` : ''}`).join('');
       const note = items[0].note ? `<div class="note">${items[0].note}</div>` : '';
       const canEdit = date === todayIso() || date > todayIso();
       return `<div class="journal-item"><div class="date">${formatDate(date)}</div>${rows}${note}
@@ -751,7 +782,7 @@ function renderJournal() {
       const items = byDate[date];
       const rows = items.map(j => {
         const groupLabel = j.group ? ` (тройка ${j.group})` : '';
-        return `<div class="who">Отгрузка${groupLabel} (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + n).join(', ')}</div>`;
+        return `<div class="who">Отгрузка${groupLabel} (${j.who.length}): ${j.who.map(n => getPersonNumber(n) + '. ' + escapeHtml(n)).join(', ')}</div>${Array.isArray(j.reasons) ? `<details class="why"><summary>Почему этот состав?</summary>${j.reasons.map((reason,i)=>`<div>${escapeHtml(j.who[i]||'')}: ${escapeHtml(reason)}</div>`).join('')}</details>` : ''}`;
       }).join('');
       const canEdit = date === todayIso() || date > todayIso();
       return `<div class="journal-item"><div class="date orange">${formatDate(date)}</div>${rows}
@@ -869,7 +900,7 @@ function openPersonCard(name) {
   el.innerHTML = `
     <div class="card">
       <h2>👤 ${num}. ${name}</h2>
-      ${cu ? `<div class="card-row"><span class="lbl">🔄 Догоняет после отпуска</span><span class="val">${cu.deadline ? 'До '+formatDate(cu.deadline) : '30 дней'}</span></div>` : ''}
+      ${cu ? `<div class="card-row"><span class="lbl">🔄 После отпуска, приоритет до +50%</span><span class="val">${cu.deadline ? 'До '+formatDate(cu.deadline) : '30 дней'}</span></div>` : ''}
       <div class="card-row"><span class="lbl">Рабочих дней за 30 дн.</span><span class="val">${workDays}</span></div>
     </div>
     <div class="card">

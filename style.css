@@ -45,12 +45,17 @@ button.mini { padding: 6px 10px; font-size: 13px; width: auto; margin: 0;
 .result .loc-name:first-child { margin-top: 0; }
 .result ul { margin: 4px 0 0; padding-left: 20px; }
 .result .points { font-size: 12px; color: #777; }
+.result .reason { font-size: 12px; color: #4d5f6e; margin: 2px 0 8px; }
+.result .note { font-size: 12px; color: #4d5f6e; margin-top: 5px; }
 .journal-item { border-bottom: 1px solid #eee; padding: 12px 0; }
 .journal-item:last-child { border-bottom: none; }
 .journal-item .date { font-weight: 600; color: #1a73e8; }
 .journal-item .date.orange { color: #e8710a; }
 .journal-item .who { color: #444; font-size: 14px; margin-top: 4px; }
 .journal-item .note { color: #999; font-size: 12px; margin-top: 2px; font-style: italic; }
+.journal-item .why { color: #4d5f6e; font-size: 12px; margin: 5px 0 9px; }
+.journal-item .why summary { cursor: pointer; }
+.journal-item .why div { margin: 3px 0 3px 12px; }
 .journal-actions { margin-top: 8px; }
 .stat-row { padding: 10px 0; border-bottom: 1px solid #eee; cursor: pointer; }
 .stat-row:last-child { border-bottom: none; }
