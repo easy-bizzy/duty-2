@@ -527,6 +527,20 @@ function removeManualLoad(i) { state.manualLoad.splice(i, 1); saveState(); rende
 function distribute() {
   const date = document.getElementById('planDate').value;
   if (!date) { showResult('⚠️ Укажите дату', true); return; }
+
+  const unavailable = [];
+  for (const m of state.manualLoc) {
+    if (!canGoToLocation(m.name, date)) unavailable.push(`${m.name} — ${m.location} (недоступен для локаций)`);
+  }
+  for (const name of state.manualLoad) {
+    if (!canGoToLoading(name, date)) unavailable.push(`${name} — отгрузка (недоступен для отгрузки)`);
+  }
+  if (unavailable.length) {
+    const el = document.getElementById('planResult');
+    el.className = 'result warn';
+    el.textContent = '⚠️ Проверьте ручные назначения на ' + formatDate(date) + ': ' + unavailable.join('; ') + '. Измените отсутствие или удалите назначение и повторите распределение. Данные не изменены.';
+    return;
+  }
   for (const p of state.people) checkVacationReturn(p.name, date);
 
   const requests = LOCATIONS.map(loc => ({
@@ -545,7 +559,6 @@ function distribute() {
 
   const manualLocData = [];
   for (const m of state.manualLoc) {
-    if (!canGoToLocation(m.name, date)) continue;
     usedLoc.add(m.name);
     manualLocData.push(m);
     state.journal.unshift({ date, location: m.location, who: [m.name], note: 'Ручное', manual: true });
@@ -578,7 +591,7 @@ function distribute() {
   const manualLoadData = [];
   const usedLoad = new Set();
   for (const n of state.manualLoad) {
-    if (!canGoToLoading(n, date) || usedLoad.has(n)) continue;
+    if (usedLoad.has(n)) continue;
     manualLoadData.push({ name: n, num: getPersonNumber(n) });
     usedLoad.add(n);
   }
@@ -958,6 +971,10 @@ function renderSettings() {
         <button class="secondary" onclick="document.getElementById('importFile').click()">📥 Импорт</button>
         <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
       </div>
+      <div class="settings-row">
+        <button class="secondary" onclick="DutyStorage.showCopies(document.getElementById('settingsBackups'))">🗂 Сохранённые копии</button>
+      </div>
+      <div id="settingsBackups"></div>
     </div>
     <div class="card danger-card">
       <h2 class="red">⚠️ Опасная зона</h2>

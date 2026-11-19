@@ -1,10 +1,10 @@
 /* Keep original dutyApp data; never recover by silently creating an empty state. */
 const DutyStorage = (() => {
-  const KEY='dutyApp', VERSION='15-ORACLE';
+  const KEY='dutyApp', VERSION='16-ORACLE';
   let expected, blocked=false;
   function validate(data) {
     if (!data || !Array.isArray(data.people) || !Array.isArray(data.journal)) throw Error('Неверный формат сохранения');
-    for(const key of ['journal','loadingJournal']) if(data[key]!==undefined && (!Array.isArray(data[key]) || data[key].some(j=>!j || typeof j.date!=='string' || !Array.isArray(j.who) || j.who.some(n=>typeof n!=='string')))) throw Error('Повреждён журнал '+key);
+    for(const key of ['journal','loadingJournal']) if(data[key]!==undefined && (!Array.isArray(data[key]) || data[key].some(j=>!j || typeof j.date!=='string' || !Array.isArray(j.who)))) throw Error('Повреждён журнал '+key);
     if(data.people.some(p=>!p || typeof p.name!=='string')) throw Error('Повреждён список сотрудников');
     for(const key of ['counts','locCounts','loadCounts','vacations','dayOffs','catchUp','onlyLoadToday','rotation']) if(data[key]!==undefined && (!data[key] || typeof data[key]!=='object' || Array.isArray(data[key]))) throw Error('Повреждены настройки '+key);
     for(const key of ['manualLoc','manualLoad','actionLog']) if(data[key]!==undefined && !Array.isArray(data[key])) throw Error('Повреждены настройки '+key);
@@ -37,7 +37,32 @@ const DutyStorage = (() => {
     if(localStorage.getItem(KEY)!==next) throw Error('Не удалось проверить сохранение');
     expected=next;
   }
-  function backup(name) { check(); rawBackup(expected,name); return expected; }
+  let backupSequence=0;
+  function backup(name) {
+    check();
+    rawBackup(expected,name+'-'+Date.now()+'-'+(++backupSequence));
+    return expected;
+  }
+  function copies() {
+    const list=[];
+    for(let i=0;i<localStorage.length;i++) {
+      const key=localStorage.key(i);
+      if(key && key.startsWith(KEY+':backup:')) list.push(key);
+    }
+    return list.sort().reverse();
+  }
+  function restore(key) {
+    if(!copies().includes(key)) throw Error('Копия не найдена');
+    const raw=localStorage.getItem(key);
+    validate(JSON.parse(raw));
+    const current=localStorage.getItem(KEY);
+    // Keep the exact current bytes before replacing them, including a damaged state.
+    if(current!==null) rawBackup(current,'before-restore-'+Date.now());
+    localStorage.setItem(KEY,raw);
+    if(localStorage.getItem(KEY)!==raw) throw Error('Не удалось проверить восстановление');
+    expected=raw; blocked=false;
+    location.reload();
+  }
   function remove() { check(); localStorage.removeItem(KEY); expected=null; }
   function download(raw,name) {
     const url=URL.createObjectURL(new Blob([raw],{type:'application/json'}));
@@ -57,6 +82,27 @@ const DutyStorage = (() => {
       download(JSON.stringify(copies,null,2),'duty-recovery.json');
     };
     box.append(label,button); document.body.appendChild(box);
+    const recover=document.createElement('button'); recover.textContent='Выбрать сохранённую копию';
+    recover.onclick=()=>showCopies(box);
+    box.append(recover);
   }
-  return {read,write,backup,remove,validate,fail,download,VERSION};
+  function showCopies(container) {
+    let list=container.querySelector('#storageCopies');
+    if(list) list.remove();
+    list=document.createElement('div'); list.id='storageCopies';
+    const keys=copies();
+    if(!keys.length) { list.textContent='Сохранённых копий нет'; container.append(list); return; }
+    const title=document.createElement('p'); title.textContent='Выберите копию. Текущее состояние будет сохранено отдельно перед восстановлением.'; list.append(title);
+    for(const key of keys) {
+      const button=document.createElement('button');
+      button.textContent=key.slice((KEY+':backup:').length);
+      button.onclick=()=>{
+        if(!confirm('Восстановить '+button.textContent+'? Сначала сохраните резервный файл, если он ещё не скачан.')) return;
+        try { restore(key); } catch(error) { alert('Восстановление не выполнено: '+error.message); }
+      };
+      list.append(button);
+    }
+    container.append(list);
+  }
+  return {read,write,backup,remove,validate,fail,download,copies,restore,showCopies,VERSION};
 })();
